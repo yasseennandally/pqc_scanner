@@ -1,0 +1,5 @@
+host,port,subject,issuer,not_before,not_after,days_until_expiry,key_type,key_detail,sig_algorithm,risk,error
+google.com,443,CN=*.google.com,"CN=WE2,O=Google Trust Services,C=US",2025-11-24T08:39:00+00:00,2026-02-16T08:38:59+00:00,66,EC,secp256r1,sha256,low,
+github.com,443,CN=github.com,"CN=Sectigo ECC Domain Validation Secure Server CA,O=Sectigo Limited,L=Salford,ST=Greater Manchester,C=GB",2025-02-05T00:00:00+00:00,2026-02-05T23:59:59+00:00,56,EC,secp256r1,sha256,low,
+facebook.com,443,"CN=*.facebook.com,O=Meta Platforms\, Inc.,L=Menlo Park,ST=California,C=US","CN=DigiCert SHA2 High Assurance Server CA,OU=www.digicert.com,O=DigiCert Inc,C=US",2025-09-19T00:00:00+00:00,2025-12-18T23:59:59+00:00,7,EC,secp256r1,sha256,high (expiring soon),
+youtube.com,443,CN=*.google.com,"CN=WE2,O=Google Trust Services,C=US",2025-11-24T08:39:00+00:00,2026-02-16T08:38:59+00:00,66,EC,secp256r1,sha256,low,

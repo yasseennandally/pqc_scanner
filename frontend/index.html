@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PQC Scanner</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      margin-bottom: 0.2rem;
+    }
+    .subtitle {
+      color: #555;
+      margin-bottom: 1.5rem;
+    }
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      font-family: monospace;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 10px;
+      padding: 8px 16px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .status {
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    table {
+      margin-top: 20px;
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 6px 8px;
+      font-size: 13px;
+    }
+    th {
+      background: #eee;
+      text-align: left;
+    }
+    .risk-high {
+      color: #b00020;
+      font-weight: 600;
+    }
+    .risk-medium {
+      color: #ff9800;
+      font-weight: 600;
+    }
+    .risk-low {
+      color: #2e7d32;
+      font-weight: 600;
+    }
+    .error {
+      color: #b00020;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <h1>PQC TLS Scanner</h1>
+  <div class="subtitle">
+    Paste one domain or host:port per line. Example:<br />
+    <code>google.com</code><br />
+    <code>github.com:443</code>
+  </div>
+
+  <textarea id="targetsInput">google.com
+github.com
+facebook.com
+youtube.com</textarea>
+  <br />
+  <button id="scanButton">Run scan</button>
+<button id="downloadCsvButton">Download CSV</button>
+  <div class="status" id="status"></div>
+
+  <table id="resultsTable" style="display:none;">
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>Port</th>
+        <th>Subject</th>
+        <th>Issuer</th>
+        <th>Not Before</th>
+        <th>Not After</th>
+        <th>Days Until Expiry</th>
+        <th>Key Type</th>
+        <th>Key Detail</th>
+        <th>Sig Algo</th>
+        <th>Risk</th>
+        <th>Error</th>
+      </tr>
+    </thead>
+    <tbody id="resultsBody"></tbody>
+  </table>
+
+  <script>
+    const API_URL = "http://127.0.0.1:8000/scan";
+
+    const scanButton = document.getElementById("scanButton");
+    const downloadCsvButton = document.getElementById("downloadCsvButton");
+    const targetsInput = document.getElementById("targetsInput");
+    const statusEl = document.getElementById("status");
+    const resultsTable = document.getElementById("resultsTable");
+    const resultsBody = document.getElementById("resultsBody");
+    let lastResults = []; // store the latest scan results
+
+
+
+    scanButton.addEventListener("click", async () => {
+      const raw = targetsInput.value || "";
+      const lines = raw
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+
+      if (lines.length === 0) {
+        statusEl.textContent = "Please enter at least one target.";
+        return;
+      }
+
+      statusEl.textContent = "Running scan...";
+      resultsTable.style.display = "none";
+      resultsBody.innerHTML = "";
+
+      try {
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ targets: lines }),
+        });
+
+        if (!response.ok) {
+          statusEl.textContent = "Error from API: " + response.status;
+          return;
+        }
+
+        const data = await response.json();
+        statusEl.textContent = `Scan complete. ${data.count} result(s).`;
+        lastResults = data.results || [];
+
+
+        if (data.results && data.results.length > 0) {
+          data.results.forEach((row) => {
+            const tr = document.createElement("tr");
+
+            const riskClass =
+              row.risk && row.risk.startsWith("high")
+                ? "risk-high"
+                : row.risk && row.risk.startsWith("medium")
+                ? "risk-medium"
+                : "risk-low";
+
+            tr.innerHTML = `
+              <td>${row.host ?? ""}</td>
+              <td>${row.port ?? ""}</td>
+              <td>${row.subject ?? ""}</td>
+              <td>${row.issuer ?? ""}</td>
+              <td>${row.not_before ?? ""}</td>
+              <td>${row.not_after ?? ""}</td>
+              <td>${row.days_until_expiry ?? ""}</td>
+              <td>${row.key_type ?? ""}</td>
+              <td>${row.key_detail ?? ""}</td>
+              <td>${row.sig_algorithm ?? ""}</td>
+              <td class="${row.risk ? riskClass : ""}">${row.risk ?? ""}</td>
+              <td class="error">${row.error ?? ""}</td>
+            `;
+            resultsBody.appendChild(tr);
+          });
+
+          resultsTable.style.display = "table";
+        } else {
+          resultsTable.style.display = "none";
+        }
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "Failed to call API. Is the backend running?";
+      }
+    });
+
+    downloadCsvButton.addEventListener("click", () => {
+  if (!lastResults || lastResults.length === 0) {
+    statusEl.textContent = "No results to export. Run a scan first.";
+    return;
+  }
+
+  // Define the CSV columns we want
+  const headers = [
+    "host",
+    "port",
+    "subject",
+    "issuer",
+    "not_before",
+    "not_after",
+    "days_until_expiry",
+    "key_type",
+    "key_detail",
+    "sig_algorithm",
+    "risk",
+    "error",
+  ];
+
+  const lines = [];
+
+  // Header line
+  lines.push(headers.join(","));
+
+  // Data lines
+  for (const row of lastResults) {
+    const values = headers.map((h) => {
+      let v = row[h] ?? "";
+      // Escape double quotes and wrap in quotes
+      if (typeof v === "string") {
+        v = v.replace(/"/g, '""');
+        return `"${v}"`;
+      }
+      return v;
+    });
+    lines.push(values.join(","));
+  }
+
+  const csvContent = lines.join("\r\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  a.download = `pqc_scan_${timestamp}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  statusEl.textContent = "CSV downloaded.";
+});
+
+  </script>
+</body>
+</html>
