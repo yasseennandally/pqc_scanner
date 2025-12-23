@@ -1,4 +1,5 @@
 cryptography
-cryptography
 fastapi
 uvicorn[standard]
+pydantic
+requests

@@ -2,250 +2,1038 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>PQC Scanner</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>PQC Scanner Dashboard</title>
+
   <style>
+    :root {
+      --bg: #0b1220;
+      --panel: rgba(255,255,255,0.06);
+      --panel2: rgba(255,255,255,0.04);
+      --text: rgba(255,255,255,0.92);
+      --muted: rgba(255,255,255,0.70);
+      --muted2: rgba(255,255,255,0.55);
+      --border: rgba(255,255,255,0.10);
+      --border2: rgba(255,255,255,0.08);
+      --good: #34d399;
+      --warn: #fbbf24;
+      --bad: #fb7185;
+      --btn: rgba(255,255,255,0.12);
+      --btn2: rgba(255,255,255,0.10);
+      --shadow: 0 12px 28px rgba(0,0,0,0.40);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+
+    html, body { height: 100%; }
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 20px;
-      background: #f5f5f5;
+      margin: 0;
+      font-family: var(--sans);
+      background: radial-gradient(1200px 600px at 20% -10%, rgba(59,130,246,0.22), transparent 55%),
+                  radial-gradient(900px 450px at 90% 0%, rgba(168,85,247,0.18), transparent 50%),
+                  radial-gradient(900px 500px at 50% 110%, rgba(34,197,94,0.14), transparent 50%),
+                  var(--bg);
+      color: var(--text);
     }
+
+    .wrap {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px 18px 60px;
+    }
+
+    .header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
     h1 {
-      margin-bottom: 0.2rem;
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0.2px;
     }
-    .subtitle {
-      color: #555;
-      margin-bottom: 1.5rem;
+
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 6px;
+      max-width: 960px;
+      line-height: 1.45;
     }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 14px;
+      margin-top: 14px;
+    }
+
+    .card {
+      background: linear-gradient(180deg, var(--panel), var(--panel2));
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .spacer { height: 6px; }
+
+    label {
+      display: inline-block;
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
     textarea {
       width: 100%;
-      min-height: 100px;
-      font-family: monospace;
-      padding: 8px;
-      box-sizing: border-box;
+      min-height: 120px;
+      resize: vertical;
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 10px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border2);
+      background: rgba(0,0,0,0.20);
+      color: var(--text);
+      outline: none;
     }
-    button {
-      margin-top: 10px;
-      padding: 8px 16px;
-      font-size: 14px;
+    textarea::placeholder { color: rgba(255,255,255,0.35); }
+
+    input[type="text"], input[type="password"] {
+      padding: 10px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border2);
+      background: rgba(0,0,0,0.20);
+      color: var(--text);
+      outline: none;
+      min-width: 320px;
+      max-width: 100%;
+      font-size: 13px;
+    }
+
+    .btn {
+      border: 1px solid var(--border);
+      background: var(--btn);
+      color: var(--text);
+      padding: 10px 12px;
+      border-radius: 12px;
       cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+      transition: transform 0.04s ease, background 0.18s ease;
+      user-select: none;
     }
+    .btn:hover { background: rgba(255,255,255,0.16); }
+    .btn:active { transform: translateY(1px); }
+    .btn.secondary {
+      background: rgba(0,0,0,0.16);
+      border: 1px solid var(--border2);
+      font-weight: 650;
+    }
+    .btn.danger {
+      background: rgba(251,113,133,0.18);
+      border-color: rgba(251,113,133,0.35);
+    }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
     .status {
+      color: var(--muted);
+      font-size: 13px;
       margin-top: 10px;
+      white-space: pre-wrap;
+      line-height: 1.4;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid var(--border2);
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .metric {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(110px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .metric .box {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid var(--border2);
+      border-radius: 12px;
+      padding: 10px;
+      min-height: 58px;
+    }
+    .metric .k { color: var(--muted2); font-size: 12px; }
+    .metric .v { font-size: 16px; font-weight: 800; margin-top: 4px; }
+
+    .qscore {
+      margin-top: 10px;
+      font-weight: 900;
       font-size: 14px;
     }
+    .qscore .low { color: var(--good); }
+    .qscore .medium { color: var(--warn); }
+    .qscore .high { color: var(--bad); }
+
     table {
-      margin-top: 20px;
       width: 100%;
       border-collapse: collapse;
-      background: white;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 6px 8px;
+      margin-top: 12px;
       font-size: 13px;
+      overflow: hidden;
+      border-radius: 12px;
+      border: 1px solid var(--border2);
+      background: rgba(0,0,0,0.20);
     }
-    th {
-      background: #eee;
+    thead th {
       text-align: left;
+      padding: 10px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      background: rgba(255,255,255,0.06);
+      border-bottom: 1px solid var(--border2);
+      position: sticky;
+      top: 0;
+      z-index: 1;
     }
-    .risk-high {
-      color: #b00020;
-      font-weight: 600;
+    tbody td {
+      padding: 9px 10px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      vertical-align: top;
     }
-    .risk-medium {
-      color: #ff9800;
-      font-weight: 600;
+    tbody tr:hover {
+      background: rgba(255,255,255,0.04);
     }
-    .risk-low {
-      color: #2e7d32;
-      font-weight: 600;
+
+    .mono { font-family: var(--mono); }
+
+    .risk-high, .pqc-high { color: var(--bad); font-weight: 900; }
+    .risk-medium, .pqc-medium { color: var(--warn); font-weight: 900; }
+    .risk-low, .pqc-low { color: var(--good); font-weight: 900; }
+
+    .error { color: var(--bad); }
+
+    .sectionTitle {
+      margin: 18px 0 6px;
+      font-weight: 900;
+      font-size: 16px;
+      letter-spacing: 0.2px;
     }
-    .error {
-      color: #b00020;
+    .sectionSub {
+      color: var(--muted);
       font-size: 13px;
+      line-height: 1.45;
+      margin-bottom: 10px;
+      max-width: 960px;
+    }
+
+    .findings-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border: 1px solid var(--border2);
+      border-radius: 999px;
+      cursor: pointer;
+      user-select: none;
+      font-weight: 800;
+      background: rgba(255,255,255,0.06);
+      color: var(--text);
+      font-size: 12px;
+    }
+    details { display: inline-block; }
+    summary::-webkit-details-marker { display:none; }
+    .findings-list {
+      margin: 8px 0 0 0;
+      padding-left: 18px;
+      color: var(--text);
+      max-width: 520px;
+    }
+    .findings-list li { margin-bottom: 8px; }
+    .findings-meta { color: var(--muted2); font-size: 12px; margin-top: 4px; }
+    .findings-evidence {
+      margin: 8px 0 0 0;
+      padding: 10px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.22);
+      color: rgba(255,255,255,0.85);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.35;
+      max-width: 520px;
+      overflow-x: auto;
+      white-space: pre;
+}
+
+
+    .twoCols {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    @media (max-width: 900px) {
+      .twoCols { grid-template-columns: 1fr; }
+      input[type="text"], input[type="password"] { min-width: 0; width: 100%; }
     }
   </style>
 </head>
+
 <body>
-  <h1>PQC TLS Scanner</h1>
-  <div class="subtitle">
-    Paste one domain or host:port per line. Example:<br />
-    <code>google.com</code><br />
-    <code>github.com:443</code>
+  <div class="wrap">
+    <div class="header">
+      <div>
+        <h1>PQC Scanner Dashboard</h1>
+        <div class="sub">
+          Scan TLS endpoints + code ZIPs for PQC readiness signals, generate summaries, and build migration plans.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <input id="apiKeyInput" type="password" placeholder="API key (x-api-key header)" />
+        <button id="saveApiKeyBtn" class="btn secondary">Save</button>
+        <span class="pill">If backend uses <span class="mono">PQC_API_KEY</span>, set it here or you’ll get 401.</span>
+      </div>
+
+      <div class="spacer"></div>
+
+      <label>Targets (one per line, optional <span class="mono">:port</span>)</label>
+      <textarea id="targets" placeholder="google.com&#10;github.com&#10;example.com:443"></textarea>
+
+      <div class="row" style="margin-top:10px;">
+        <button id="runBtn" class="btn">Run TLS Scan</button>
+        <button id="exportBtn" class="btn secondary" disabled>Download CSV</button>
+
+        <!-- ✅ ADDED: TLS migration plan button (keeps same style) -->
+        <button id="tlsPlanBtn" class="btn secondary" disabled>Show TLS Migration Plan</button>
+
+        <input id="scanIdInput" type="text" placeholder="Load existing scan ID" />
+        <button id="loadBtn" class="btn secondary">Load ID</button>
+
+        <button id="clearBtn" class="btn danger">Clear</button>
+      </div>
+
+      <div id="status" class="status"></div>
+
+      <div class="metric" id="summaryBoxes" style="display:none;">
+        <div class="box"><div class="k">Total</div><div class="v" id="sumTotal">0</div></div>
+        <div class="box"><div class="k">High</div><div class="v" id="sumHigh">0</div></div>
+        <div class="box"><div class="k">Medium</div><div class="v" id="sumMed">0</div></div>
+        <div class="box"><div class="k">Low</div><div class="v" id="sumLow">0</div></div>
+        <div class="box"><div class="k">Errors</div><div class="v" id="sumErr">0</div></div>
+      </div>
+
+      <div id="qscore" class="qscore"></div>
+      <div id="scanIdLabel" class="status"></div>
+    </div>
+
+    <div class="grid">
+      <div class="card" id="resultsCard" style="display:none;">
+        <div class="sectionTitle">TLS scan results</div>
+        <div class="sectionSub">Results load after scan completes (sync scan). Findings can be expanded per row.</div>
+
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th>Host</th>
+              <th>Port</th>
+              <th>Subject</th>
+              <th>Issuer</th>
+              <th>Not Before</th>
+              <th>Not After</th>
+              <th>Days Until Expiry</th>
+              <th>Key Type</th>
+              <th>Key Detail</th>
+              <th>Sig Algo</th>
+              <th>Risk</th>
+              <th>Findings</th>
+              <th>PQC Relevance</th>
+              <th>PQC Recommendation</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+
+      <!-- TLS Migration Plan section already existed in your v2; we keep it exactly -->
+      <div class="card" id="migrationPlanBox" style="display:none;">
+        <div class="sectionTitle">TLS Migration Plan</div>
+        <div class="sectionSub">Prioritized actions derived from TLS scan results.</div>
+        <div id="migrationPlanSummary" class="status"></div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Priority</th>
+              <th>Target</th>
+              <th>Issue</th>
+              <th>Action</th>
+              <th>PQC Mapping</th>
+            </tr>
+          </thead>
+          <tbody id="migrationPlanBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="sectionTitle">Recent TLS scans</div>
+        <div class="sectionSub">History is loaded from <span class="mono">GET /scans</span>. Click “Load” to reload by ID.</div>
+
+        <table id="historyTable">
+          <thead>
+            <tr>
+              <th>Scan ID</th>
+              <th>Created at</th>
+              <th>Status</th>
+              <th>Total</th>
+              <th>High</th>
+              <th>Medium</th>
+              <th>Low</th>
+              <th>Errors</th>
+              <th>Q Score</th>
+              <th>Q Level</th>
+              <th>Load</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="sectionTitle">Code scan (ZIP)</div>
+        <div class="sectionSub">
+          Upload a <span class="mono">.zip</span> of source code. The backend scans for crypto patterns and hardcoded keys.
+        </div>
+
+        <div class="twoCols">
+          <div class="card" style="box-shadow:none;">
+            <div class="row">
+              <input id="zipInput" type="file" accept=".zip" />
+              <button id="codeScanBtn" class="btn secondary">Run Code Scan</button>
+            </div>
+            <div id="codeStatus" class="status"></div>
+          </div>
+
+          <div class="card" style="box-shadow:none;">
+            <div class="row">
+              <input id="zipPlanInput" type="file" accept=".zip" />
+              <button id="codePlanBtn" class="btn secondary">Generate Code Migration Plan</button>
+            </div>
+            <div id="codePlanStatus" class="status"></div>
+          </div>
+        </div>
+
+        <table id="codeResultsTable" style="display:none;">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Line</th>
+              <th>Severity</th>
+              <th>Rule</th>
+              <th>Line preview</th>
+              <th>Recommendation</th>
+            </tr>
+          </thead>
+          <tbody id="codeResultsBody"></tbody>
+        </table>
+
+        <div class="card" id="codePlanBox" style="display:none; margin-top:12px;">
+          <div class="sectionTitle">Code Migration Plan</div>
+          <div id="codePlanSummary" class="status"></div>
+          <table>
+            <thead>
+              <tr>
+                <th>Priority</th>
+                <th>Item</th>
+                <th>Problem</th>
+                <th>Recommendation</th>
+                <th>PQC Mapping</th>
+              </tr>
+            </thead>
+            <tbody id="codePlanBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <textarea id="targetsInput">google.com
-github.com
-facebook.com
-youtube.com</textarea>
-  <br />
-  <button id="scanButton">Run scan</button>
-<button id="downloadCsvButton">Download CSV</button>
-  <div class="status" id="status"></div>
-
-  <table id="resultsTable" style="display:none;">
-    <thead>
-      <tr>
-        <th>Host</th>
-        <th>Port</th>
-        <th>Subject</th>
-        <th>Issuer</th>
-        <th>Not Before</th>
-        <th>Not After</th>
-        <th>Days Until Expiry</th>
-        <th>Key Type</th>
-        <th>Key Detail</th>
-        <th>Sig Algo</th>
-        <th>Risk</th>
-        <th>Error</th>
-      </tr>
-    </thead>
-    <tbody id="resultsBody"></tbody>
-  </table>
-
   <script>
-    const API_URL = "http://127.0.0.1:8000/scan";
+    const API_BASE = "http://127.0.0.1:8000";
+    const API_CREATE_SCAN = API_BASE + "/scans";
+    const API_LIST_SCANS = API_BASE + "/scans";
+    const API_SCAN_RESULTS = (id) => API_BASE + "/scans/" + encodeURIComponent(id) + "/results";
+    const API_TLS_MIGRATION_PLAN = (id) => API_BASE + "/scans/" + encodeURIComponent(id) + "/migration-plan";
 
-    const scanButton = document.getElementById("scanButton");
-    const downloadCsvButton = document.getElementById("downloadCsvButton");
-    const targetsInput = document.getElementById("targetsInput");
+    const API_CODE_SCAN = API_BASE + "/code-scan";
+    const API_CODE_PLAN = API_BASE + "/code-scan/migration-plan";
+
+    let apiKey = localStorage.getItem("pqc_api_key") || "";
+    let lastScanId = "";
+    let lastResults = [];
+    let lastSummary = null;
+
+    const targetsEl = document.getElementById("targets");
+    const runBtn = document.getElementById("runBtn");
+    const exportBtn = document.getElementById("exportBtn");
+    const tlsPlanBtn = document.getElementById("tlsPlanBtn");
+    const loadBtn = document.getElementById("loadBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const scanIdInput = document.getElementById("scanIdInput");
+
     const statusEl = document.getElementById("status");
-    const resultsTable = document.getElementById("resultsTable");
+    const qscoreEl = document.getElementById("qscore");
+    const scanIdLabel = document.getElementById("scanIdLabel");
+
+    const resultsCard = document.getElementById("resultsCard");
     const resultsBody = document.getElementById("resultsBody");
-    let lastResults = []; // store the latest scan results
+    const historyBody = document.getElementById("historyBody");
 
+    const summaryBoxes = document.getElementById("summaryBoxes");
+    const sumTotal = document.getElementById("sumTotal");
+    const sumHigh = document.getElementById("sumHigh");
+    const sumMed = document.getElementById("sumMed");
+    const sumLow = document.getElementById("sumLow");
+    const sumErr = document.getElementById("sumErr");
 
+    const migrationPlanBox = document.getElementById("migrationPlanBox");
+    const migrationPlanSummary = document.getElementById("migrationPlanSummary");
+    const migrationPlanBody = document.getElementById("migrationPlanBody");
 
-    scanButton.addEventListener("click", async () => {
-      const raw = targetsInput.value || "";
-      const lines = raw
-        .split("\n")
-        .map((l) => l.trim())
-        .filter((l) => l.length > 0);
+    const apiKeyInput = document.getElementById("apiKeyInput");
+    const saveApiKeyBtn = document.getElementById("saveApiKeyBtn");
 
-      if (lines.length === 0) {
-        statusEl.textContent = "Please enter at least one target.";
+    const zipInput = document.getElementById("zipInput");
+    const codeScanBtn = document.getElementById("codeScanBtn");
+    const codeStatusEl = document.getElementById("codeStatus");
+    const codeResultsTable = document.getElementById("codeResultsTable");
+    const codeResultsBody = document.getElementById("codeResultsBody");
+
+    const zipPlanInput = document.getElementById("zipPlanInput");
+    const codePlanBtn = document.getElementById("codePlanBtn");
+    const codePlanStatus = document.getElementById("codePlanStatus");
+    const codePlanBox = document.getElementById("codePlanBox");
+    const codePlanSummary = document.getElementById("codePlanSummary");
+    const codePlanBody = document.getElementById("codePlanBody");
+
+    apiKeyInput.value = apiKey;
+
+    saveApiKeyBtn.addEventListener("click", () => {
+      apiKey = apiKeyInput.value.trim();
+      localStorage.setItem("pqc_api_key", apiKey);
+      statusEl.textContent = "Saved API key.";
+      setTimeout(() => { if (statusEl.textContent === "Saved API key.") statusEl.textContent = ""; }, 1000);
+    });
+
+    function authHeaders(extra = {}) {
+      const h = { ...extra };
+      if (apiKey) h["x-api-key"] = apiKey;
+      return h;
+    }
+
+    async function apiFetch(url, opts = {}) {
+      const options = { ...opts };
+      options.headers = authHeaders(options.headers || {});
+      return fetch(url, options);
+    }
+
+    function clearUI(preserveScanId = false) {
+      statusEl.textContent = "";
+      qscoreEl.textContent = "";
+      resultsCard.style.display = "none";
+      resultsBody.innerHTML = "";
+      migrationPlanBox.style.display = "none";
+      migrationPlanSummary.textContent = "";
+      migrationPlanBody.innerHTML = "";
+
+      lastResults = [];
+      lastSummary = null;
+      exportBtn.disabled = true;
+      tlsPlanBtn.disabled = true;
+
+      if (!preserveScanId) scanIdLabel.textContent = "";
+      summaryBoxes.style.display = "none";
+    }
+
+    function renderSummary(summary) {
+      lastSummary = summary;
+      if (!summary) {
+        summaryBoxes.style.display = "none";
+        qscoreEl.textContent = "";
         return;
       }
 
-      statusEl.textContent = "Running scan...";
-      resultsTable.style.display = "none";
+      summaryBoxes.style.display = "grid";
+      sumTotal.textContent = summary.total ?? 0;
+      sumHigh.textContent = summary.high ?? 0;
+      sumMed.textContent = summary.medium ?? 0;
+      sumLow.textContent = summary.low ?? 0;
+      sumErr.textContent = summary.errors ?? 0;
+
+      const score = summary.quantum_risk_score ?? 0;
+      const level = (summary.quantum_risk_level || "low").toLowerCase();
+
+      let cls = "low";
+      if (level.includes("high")) cls = "high";
+      else if (level.includes("medium")) cls = "medium";
+
+      qscoreEl.innerHTML = `Quantum Risk Score: <span class="${cls}">${score}/100 (${level})</span>`;
+    }
+
+    function renderTLSResults() {
       resultsBody.innerHTML = "";
+      if (!lastResults || !lastResults.length) {
+        resultsCard.style.display = "none";
+        return;
+      }
 
-      try {
-        const response = await fetch(API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ targets: lines }),
+      resultsCard.style.display = "block";
+
+      lastResults.forEach((r) => {
+        const risk = (r.risk || "");
+        const pqcRel = (r.pqc_relevance || "");
+
+        const riskCls =
+          risk.toLowerCase().startsWith("high") || risk.toLowerCase().includes("expired") ? "risk-high"
+          : risk.toLowerCase().startsWith("medium") ? "risk-medium"
+          : "risk-low";
+
+        const pqcCls =
+          pqcRel.toLowerCase().startsWith("high") ? "pqc-high"
+          : pqcRel.toLowerCase().startsWith("medium") ? "pqc-medium"
+          : "pqc-low";
+
+        const findings = Array.isArray(r.findings) ? r.findings : [];
+
+        const findingsCell = (!findings.length) ? `<span class="pill">—</span>` : `
+          <details>
+            <summary class="findings-pill">${findings.length} finding(s) ▾</summary>
+            <ul class="findings-list">
+              ${findings.map(f => {
+  const sev = (f.severity || "").toUpperCase();
+  const title = (f.title || f.message || f.rule_id || "Finding");
+  const rid = (f.rule_id || "");
+  const fix = (f.remediation || f.recommendation || "");
+
+  const conf = (f.confidence || "").toLowerCase();
+  const confReason = (f.confidence_reason || "");
+  const evidence = f.evidence || {};
+
+  // Pretty-print evidence (small, readable)
+  let evText = "";
+  try {
+    const keys = Object.keys(evidence || {});
+    if (keys.length) {
+      // Keep it short in UI
+      const trimmed = {};
+      keys.slice(0, 6).forEach(k => trimmed[k] = evidence[k]);
+      evText = JSON.stringify(trimmed, null, 2);
+      if (keys.length > 6) evText += "\n…";
+    }
+  } catch (e) {
+    evText = "";
+  }
+
+  const confLine = conf
+    ? `<div class="findings-meta"><strong>Confidence:</strong> ${conf}${confReason ? " — " + confReason : ""}</div>`
+    : "";
+
+  const evBlock = evText
+    ? `<pre class="findings-evidence">${evText}</pre>`
+    : "";
+
+  return `
+    <li>
+      <strong>${sev}</strong> ${title}
+      <div class="findings-meta">
+        ${rid ? rid : ""}${fix ? (rid ? " • " : "") + "Fix: " + fix : ""}
+      </div>
+      ${confLine}
+      ${evBlock}
+    </li>
+  `;
+}).join("")}
+
+            </ul>
+          </details>
+        `;
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${r.host ?? ""}</td>
+          <td>${r.port ?? ""}</td>
+          <td>${r.subject ?? ""}</td>
+          <td>${r.issuer ?? ""}</td>
+          <td>${r.not_before ?? ""}</td>
+          <td>${r.not_after ?? ""}</td>
+          <td>${r.days_until_expiry ?? ""}</td>
+          <td>${r.key_type ?? ""}</td>
+          <td class="mono">${r.key_detail ?? ""}</td>
+          <td>${r.sig_algorithm ?? ""}</td>
+          <td class="${riskCls}">${r.risk ?? ""}</td>
+          <td>${findingsCell}</td>
+          <td class="${pqcCls}">${r.pqc_relevance ?? ""}</td>
+          <td>${r.pqc_recommendation ?? ""}</td>
+          <td class="error">${r.error ?? ""}</td>
+        `;
+        resultsBody.appendChild(tr);
+      });
+    }
+
+    async function fetchTLSScanResults(scanId) {
+      statusEl.textContent = "Loading scan results...";
+      const res = await apiFetch(API_SCAN_RESULTS(scanId), { method: "GET" });
+
+      if (res.status === 401) {
+        statusEl.textContent = "401 Unauthorized. Set the API key at the top and Save.";
+        return;
+      }
+      if (!res.ok) {
+        statusEl.textContent = "Error fetching scan results: " + res.status;
+        return;
+      }
+
+      const data = await res.json();
+      lastScanId = data.id || scanId;
+
+      scanIdLabel.textContent = lastScanId
+        ? `Scan ID: ${lastScanId} (created at ${data.created_at || ""})`
+        : "";
+
+      lastResults = data.results || [];
+      renderSummary(data.summary || null);
+      renderTLSResults();
+
+      exportBtn.disabled = !(lastResults && lastResults.length);
+      tlsPlanBtn.disabled = !lastScanId;
+
+      statusEl.textContent = "Loaded scan results.";
+    }
+
+    async function fetchHistory() {
+      const res = await apiFetch(API_LIST_SCANS + "?limit=20", { method: "GET" });
+      if (!res.ok) return;
+
+      const rows = await res.json();
+      historyBody.innerHTML = "";
+
+      rows.forEach((row) => {
+        const s = row.summary || {};
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${row.id ?? ""}</td>
+          <td>${row.created_at ?? ""}</td>
+          <td>${row.status ?? ""}</td>
+          <td>${s.total ?? ""}</td>
+          <td>${s.high ?? ""}</td>
+          <td>${s.medium ?? ""}</td>
+          <td>${s.low ?? ""}</td>
+          <td>${s.errors ?? ""}</td>
+          <td>${s.quantum_risk_score ?? ""}</td>
+          <td>${s.quantum_risk_level ?? ""}</td>
+          <td><button class="btn secondary" data-id="${row.id}">Load</button></td>
+        `;
+        historyBody.appendChild(tr);
+      });
+
+      historyBody.querySelectorAll("button[data-id]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-id");
+          scanIdInput.value = id;
+          clearUI(true);
+          await fetchTLSScanResults(id);
         });
+      });
+    }
 
-        if (!response.ok) {
-          statusEl.textContent = "Error from API: " + response.status;
-          return;
-        }
+    async function runTLSScan() {
+      const raw = targetsEl.value || "";
+      const targets = raw.split("\n").map(s => s.trim()).filter(Boolean);
 
-        const data = await response.json();
-        statusEl.textContent = `Scan complete. ${data.count} result(s).`;
-        lastResults = data.results || [];
+      clearUI(true);
+      statusEl.textContent = "Creating scan...";
+      migrationPlanBox.style.display = "none";
 
+      const res = await apiFetch(API_CREATE_SCAN, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets })
+      });
 
-        if (data.results && data.results.length > 0) {
-          data.results.forEach((row) => {
-            const tr = document.createElement("tr");
-
-            const riskClass =
-              row.risk && row.risk.startsWith("high")
-                ? "risk-high"
-                : row.risk && row.risk.startsWith("medium")
-                ? "risk-medium"
-                : "risk-low";
-
-            tr.innerHTML = `
-              <td>${row.host ?? ""}</td>
-              <td>${row.port ?? ""}</td>
-              <td>${row.subject ?? ""}</td>
-              <td>${row.issuer ?? ""}</td>
-              <td>${row.not_before ?? ""}</td>
-              <td>${row.not_after ?? ""}</td>
-              <td>${row.days_until_expiry ?? ""}</td>
-              <td>${row.key_type ?? ""}</td>
-              <td>${row.key_detail ?? ""}</td>
-              <td>${row.sig_algorithm ?? ""}</td>
-              <td class="${row.risk ? riskClass : ""}">${row.risk ?? ""}</td>
-              <td class="error">${row.error ?? ""}</td>
-            `;
-            resultsBody.appendChild(tr);
-          });
-
-          resultsTable.style.display = "table";
-        } else {
-          resultsTable.style.display = "none";
-        }
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "Failed to call API. Is the backend running?";
+      if (res.status === 401) {
+        statusEl.textContent = "401 Unauthorized. Set the API key at the top and Save.";
+        return;
       }
+      if (!res.ok) {
+        const txt = await res.text();
+        statusEl.textContent = "Failed to create scan: " + res.status + "\n" + txt;
+        return;
+      }
+
+      const data = await res.json();
+      lastScanId = data.id;
+      scanIdInput.value = lastScanId;
+
+      await fetchTLSScanResults(lastScanId);
+      await fetchHistory();
+    }
+
+    // ✅ UPDATED: supports both response shapes (actions OR all_actions/top_actions)
+    async function fetchTLSMigrationPlan(scanId) {
+      migrationPlanBox.style.display = "none";
+      migrationPlanSummary.textContent = "";
+      migrationPlanBody.innerHTML = "";
+
+      const res = await apiFetch(API_TLS_MIGRATION_PLAN(scanId), { method: "GET" });
+      if (res.status === 401) {
+        migrationPlanSummary.textContent = "401 Unauthorized. Set API key and Save.";
+        return;
+      }
+      if (!res.ok) {
+        const txt = await res.text();
+        migrationPlanSummary.textContent = "Migration plan error: " + res.status + " " + txt;
+        return;
+      }
+
+      const plan = await res.json();
+
+      let raw = [];
+      if (Array.isArray(plan.actions)) raw = plan.actions;
+      else if (Array.isArray(plan.all_actions)) raw = plan.all_actions;
+      else if (Array.isArray(plan.top_actions)) raw = plan.top_actions;
+
+      const actions = raw.map((a) => {
+        const target =
+          a.target ??
+          a.item ??
+          (a.host ? `${a.host}:${a.port || 443}` : "");
+
+        const issue =
+          a.issue ??
+          a.problem ??
+          a.title ??
+          a.rule_id ??
+          "";
+
+        const action =
+          a.action ??
+          a.recommendation ??
+          a.rec ??
+          a.remediation ??
+          "";
+
+        const priority =
+          (a.priority ?? a.severity ?? a.risk_level ?? "medium");
+
+        return {
+          priority,
+          target,
+          issue,
+          action,
+          pqc_mapping: a.pqc_mapping ?? "",
+        };
+      });
+
+      if (plan.summary) {
+        const sum = plan.summary;
+        migrationPlanSummary.textContent =
+          `${sum.title || "TLS Migration Plan"} — Total actions: ${sum.total_actions ?? actions.length} ` +
+          `(Critical: ${sum.critical ?? 0}, High: ${sum.high ?? 0}, Medium: ${sum.medium ?? 0}, Low: ${sum.low ?? 0})`;
+      } else {
+        migrationPlanSummary.textContent = `Actions: ${actions.length} (prioritized)`;
+      }
+
+      migrationPlanBody.innerHTML = "";
+      actions.forEach((a) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${a.priority ?? ""}</td>
+          <td>${a.target ?? ""}</td>
+          <td>${a.issue ?? ""}</td>
+          <td>${a.action ?? ""}</td>
+          <td>${a.pqc_mapping ?? ""}</td>
+        `;
+        migrationPlanBody.appendChild(tr);
+      });
+
+      migrationPlanBox.style.display = "block";
+    }
+
+    function downloadCSV() {
+      if (!lastResults || !lastResults.length) return;
+
+      const keys = [
+        "host","port","subject","issuer","not_before","not_after","days_until_expiry",
+        "key_type","key_detail","sig_algorithm","risk","pqc_relevance","pqc_recommendation","error"
+      ];
+
+      const lines = [];
+      lines.push(keys.join(","));
+
+      lastResults.forEach(r => {
+        const row = keys.map(k => {
+          const v = (r[k] ?? "");
+          const s = String(v).replace(/"/g,'""');
+          return `"${s}"`;
+        });
+        lines.push(row.join(","));
+      });
+
+      const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `pqc_scan_${lastScanId || "results"}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    async function runCodeScan() {
+      const f = zipInput.files && zipInput.files[0];
+      if (!f) { codeStatusEl.textContent = "Choose a .zip first."; return; }
+
+      codeStatusEl.textContent = "Uploading + scanning...";
+      codeResultsTable.style.display = "none";
+      codeResultsBody.innerHTML = "";
+
+      const fd = new FormData();
+      fd.append("archive", f);
+
+      const res = await apiFetch(API_CODE_SCAN, { method: "POST", body: fd });
+      if (res.status === 401) {
+        codeStatusEl.textContent = "401 Unauthorized. Set API key and Save.";
+        return;
+      }
+      if (!res.ok) {
+        codeStatusEl.textContent = "Code scan failed: " + res.status;
+        return;
+      }
+
+      const data = await res.json();
+      codeStatusEl.textContent = "Findings: " + (data.count ?? 0);
+
+      const findings = data.findings || [];
+      if (findings.length) {
+        codeResultsTable.style.display = "table";
+        findings.forEach(x => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td class="mono">${x.file ?? ""}</td>
+            <td>${x.line ?? ""}</td>
+            <td>${x.severity ?? ""}</td>
+            <td>${x.rule_name ?? ""}</td>
+            <td class="mono">${x.line_preview ?? ""}</td>
+            <td>${x.recommendation ?? ""}</td>
+          `;
+          codeResultsBody.appendChild(tr);
+        });
+      }
+    }
+
+    async function runCodeMigrationPlan() {
+      const f = zipPlanInput.files && zipPlanInput.files[0];
+      if (!f) { codePlanStatus.textContent = "Choose a .zip first."; return; }
+
+      codePlanStatus.textContent = "Uploading + generating migration plan...";
+      codePlanBox.style.display = "none";
+      codePlanSummary.textContent = "";
+      codePlanBody.innerHTML = "";
+
+      const fd = new FormData();
+      fd.append("archive", f);
+
+      const res = await apiFetch(API_CODE_PLAN, { method: "POST", body: fd });
+      if (res.status === 401) {
+        codePlanStatus.textContent = "401 Unauthorized. Set API key and Save.";
+        return;
+      }
+      if (!res.ok) {
+        const txt = await res.text();
+        codePlanStatus.textContent = "Code migration plan failed: " + res.status + " " + txt;
+        return;
+      }
+
+      const plan = await res.json();
+      const sum = plan.summary || {};
+      const actions = plan.all_actions || plan.actions || plan.top_actions || [];
+
+      codePlanSummary.textContent =
+        `${sum.title || "Code Migration Plan"} — Total actions: ${sum.total_actions ?? actions.length}`;
+
+      codePlanBody.innerHTML = "";
+      actions.forEach(a => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${a.priority ?? ""}</td>
+          <td class="mono">${a.item ?? a.target ?? ""}</td>
+          <td>${a.problem ?? a.issue ?? ""}</td>
+          <td>${a.recommendation ?? a.action ?? ""}</td>
+          <td>${a.pqc_mapping ?? ""}</td>
+        `;
+        codePlanBody.appendChild(tr);
+      });
+
+      codePlanBox.style.display = "block";
+      codePlanStatus.textContent = "Code migration plan ready.";
+    }
+
+    runBtn.addEventListener("click", runTLSScan);
+    exportBtn.addEventListener("click", downloadCSV);
+
+    // ✅ ADDED: button click -> fetch TLS migration plan
+    tlsPlanBtn.addEventListener("click", async () => {
+      if (!lastScanId) {
+        statusEl.textContent = "Run a scan or load a scan ID first.";
+        return;
+      }
+      statusEl.textContent = "Loading TLS migration plan...";
+      await fetchTLSMigrationPlan(lastScanId);
+      statusEl.textContent = "TLS migration plan loaded.";
     });
 
-    downloadCsvButton.addEventListener("click", () => {
-  if (!lastResults || lastResults.length === 0) {
-    statusEl.textContent = "No results to export. Run a scan first.";
-    return;
-  }
-
-  // Define the CSV columns we want
-  const headers = [
-    "host",
-    "port",
-    "subject",
-    "issuer",
-    "not_before",
-    "not_after",
-    "days_until_expiry",
-    "key_type",
-    "key_detail",
-    "sig_algorithm",
-    "risk",
-    "error",
-  ];
-
-  const lines = [];
-
-  // Header line
-  lines.push(headers.join(","));
-
-  // Data lines
-  for (const row of lastResults) {
-    const values = headers.map((h) => {
-      let v = row[h] ?? "";
-      // Escape double quotes and wrap in quotes
-      if (typeof v === "string") {
-        v = v.replace(/"/g, '""');
-        return `"${v}"`;
-      }
-      return v;
+    loadBtn.addEventListener("click", async () => {
+      const id = (scanIdInput.value || "").trim();
+      if (!id) { statusEl.textContent = "Paste a scan ID first."; return; }
+      clearUI(true);
+      await fetchTLSScanResults(id);
+      await fetchHistory();
     });
-    lines.push(values.join(","));
-  }
 
-  const csvContent = lines.join("\r\n");
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
+    clearBtn.addEventListener("click", () => {
+      targetsEl.value = "";
+      scanIdInput.value = "";
+      lastScanId = "";
+      clearUI(false);
+      fetchHistory();
+    });
 
-  const a = document.createElement("a");
-  a.href = url;
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  a.download = `pqc_scan_${timestamp}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+    codeScanBtn.addEventListener("click", runCodeScan);
+    codePlanBtn.addEventListener("click", runCodeMigrationPlan);
 
-  statusEl.textContent = "CSV downloaded.";
-});
-
+    // initial load
+    clearUI(false);
+    fetchHistory();
   </script>
 </body>
 </html>
