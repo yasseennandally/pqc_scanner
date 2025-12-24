@@ -1,92 +1,106 @@
-import threading
+from __future__ import print_function
+from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Dict, Any, Callable, Optional
 from datetime import datetime
+import threading
+import time
 
-from scanner import scan_host
-
-
-def _parse_target(target: str):
-    """
-    Parse "host" or "host:port" -> (host, port)
-    """
-    t = (target or "").strip()
-    if not t:
-        return None, None
-    if ":" in t:
-        host, port_str = t.split(":", 1)
-        host = host.strip()
-        try:
-            port = int(port_str.strip())
-        except Exception:
-            port = 443
-        return host, port
-    return t, 443
+from scanner import scan_host  # your scanner.py must expose scan_host(host, port)
 
 
-def _scan_one(target: str) -> Dict[str, Any]:
-    host, port = _parse_target(target)
-    if not host:
-        return {"host": "", "port": 0, "error": "empty target", "risk": "unknown"}
-    return scan_host(host, port)
+class ScanJob(object):
+    def __init__(self, scan_id: str, targets: List[str], max_workers: int = 15):
+        self.id = scan_id
+        self.targets = targets
+        self.max_workers = max_workers
 
+        self.created_at = datetime.utcnow()
+        self.status = "running"
 
-def run_scan_job(
-    scan_id: str,
-    targets: List[str],
-    config: Dict[str, Any],
-    on_progress: Callable[[int, int], None],
-    on_done: Callable[[List[Dict[str, Any]]], None],
-    on_failed: Callable[[str], None],
-) -> None:
-    """
-    Run scan in a worker thread with concurrency and progress callbacks.
-    """
-    # Config defaults
-    max_workers = int(config.get("max_workers") or 20)
-    if max_workers < 1:
-        max_workers = 1
-    if max_workers > 200:
-        max_workers = 200  # safety
+        self.total = len(targets)
+        self.done = 0
+        self.failed = 0
+        self.percent = 0
 
-    # Deduplicate & clean
-    cleaned = []
-    seen = set()
-    for t in targets:
-        t = (t or "").strip()
-        if not t:
-            continue
-        if t in seen:
-            continue
-        seen.add(t)
-        cleaned.append(t)
+        self.results: List[Dict[str, Any]] = []
+        self._lock = threading.Lock()
 
-    total = len(cleaned)
-    if total == 0:
-        on_done([])
-        return
+        self.started_at = time.time()
+        self.finished_at = None
 
-    results: List[Dict[str, Any]] = []
-    completed = 0
+    def _inc_done(self, ok: bool):
+        with self._lock:
+            self.done += 1
+            if not ok:
+                self.failed += 1
+            self.percent = int((float(self.done) / float(self.total)) * 100) if self.total else 100
 
-    try:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = [pool.submit(_scan_one, t) for t in cleaned]
-            for fut in as_completed(futures):
+    def add_result(self, r: Dict[str, Any]):
+        with self._lock:
+            self.results.append(r)
+
+    def run(self):
+        if not self.targets:
+            self.status = "completed"
+            self.percent = 100
+            self.finished_at = time.time()
+            return
+
+        def parse_target(t: str):
+            t = (t or "").strip()
+            if not t:
+                return None
+            if ":" in t:
+                host, port = t.rsplit(":", 1)
                 try:
-                    res = fut.result()
+                    return host.strip(), int(port.strip())
+                except Exception:
+                    return host.strip(), 443
+            return t, 443
+
+        parsed = []
+        for t in self.targets:
+            p = parse_target(t)
+            if p:
+                parsed.append(p)
+
+        self.total = len(parsed)
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
+            futures = {}
+            for host, port in parsed:
+                futures[ex.submit(scan_host, host, port)] = (host, port)
+
+            for fut in as_completed(futures):
+                host, port = futures[fut]
+                try:
+                    r = fut.result()
+                    if not isinstance(r, dict):
+                        r = {"host": host, "port": port, "error": "scan_host returned non-dict"}
+                    ok = not bool(r.get("error"))
+                    self.add_result(r)
+                    self._inc_done(ok=ok)
                 except Exception as e:
-                    res = {"host": "", "port": 0, "error": str(e), "risk": "unknown (scan error)"}
+                    self.add_result({"host": host, "port": port, "error": str(e)})
+                    self._inc_done(ok=False)
 
-                results.append(res)
-                completed += 1
-                on_progress(completed, total)
+        self.status = "completed"
+        self.percent = 100
+        self.finished_at = time.time()
 
-        # Keep results stable-ish: sort by host:port for repeatable outputs
-        def _key(r):
-            return (r.get("host") or "", int(r.get("port") or 0))
-        results.sort(key=_key)
+    def snapshot_progress(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "id": self.id,
+                "status": self.status,
+                "created_at": self.created_at.isoformat(),
+                "total": self.total,
+                "done": self.done,
+                "failed": self.failed,
+                "percent": self.percent,
+                "elapsed_seconds": int(time.time() - self.started_at),
+            }
 
-        on_done(results)
-    except Exception as e:
-        on_failed(str(e))
+    def snapshot_results(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            return list(self.results)
