@@ -1,24 +1,52 @@
 # app.py
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 import uuid
 import os
 import time
+import threading
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from scanner import run_scan
+from scanner import run_scan, scan_host  # scan_host used for parallel scans
 from db import init_db, save_scan, load_scan, list_scans
 
-from code_scanner import scan_zip_bytes
 from migration import build_migration_plan_tls, build_migration_plan_code
 
 
-# ---------- Pydantic models ----------
+# -----------------------------
+# Config / security
+# -----------------------------
+API_KEY = os.getenv("PQC_API_KEY", "").strip()
+
+PROTECTED_PREFIXES = (
+    "/scan",
+    "/scans",
+    "/code-scan",
+)
+
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_REQUESTS = 60  # 60 req/min per IP
+_requests_by_ip = defaultdict(deque)
+
+MAX_TARGETS = 200
+MAX_TARGET_LEN = 255
+
+# Parallel scan tuning
+DEFAULT_MAX_WORKERS = int(os.getenv("PQC_MAX_WORKERS", "20"))
+DEFAULT_MAX_WORKERS = max(1, min(DEFAULT_MAX_WORKERS, 64))
+
+CONNECT_TIMEOUT_SECONDS = float(os.getenv("PQC_CONNECT_TIMEOUT", "5.0"))
+
+
+# -----------------------------
+# Pydantic models
+# -----------------------------
 class ScanRequest(BaseModel):
     targets: List[str]
 
@@ -31,6 +59,8 @@ class ScanStatus(BaseModel):
     id: str
     status: str
     created_at: datetime
+    progress: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 
 class ScanWithResults(BaseModel):
@@ -39,6 +69,8 @@ class ScanWithResults(BaseModel):
     created_at: datetime
     results: List[Dict[str, Any]]
     summary: Dict[str, Any]
+    progress: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
 
 
 class ScanListItem(BaseModel):
@@ -62,11 +94,42 @@ class CodeScanResponse(BaseModel):
     findings: List[CodeFinding]
 
 
-# ---------- In-memory store (cache) ----------
+# -----------------------------
+# In-memory store (cache)
+# -----------------------------
 SCANS: Dict[str, Dict[str, Any]] = {}
+_SCANS_LOCK = threading.Lock()
 
 
-# ---------- Summary helper ----------
+# -----------------------------
+# Helpers
+# -----------------------------
+def _validate_targets(targets: List[str]):
+    if len(targets) > MAX_TARGETS:
+        raise HTTPException(status_code=400, detail=f"Too many targets. Max is {MAX_TARGETS}.")
+    for t in targets:
+        if len(t) > MAX_TARGET_LEN:
+            raise HTTPException(status_code=400, detail="Target too long.")
+
+
+def parse_target(t: str):
+    t = (t or "").strip()
+    if not t:
+        return "", 443
+    if "://" in t:
+        t = t.split("://", 1)[1]
+    if "/" in t:
+        t = t.split("/", 1)[0]
+    if ":" in t:
+        host, p = t.rsplit(":", 1)
+        host = host.strip()
+        try:
+            return host, int(p.strip())
+        except Exception:
+            return host, 443
+    return t, 443
+
+
 def build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     total = len(results)
     high = 0
@@ -94,6 +157,9 @@ def build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
             expiring_soon += 1
             high += 1
             risk_points += 10
+        elif risk.startswith("critical"):
+            high += 1
+            risk_points += 12
         elif risk.startswith("high"):
             high += 1
             risk_points += 10
@@ -104,12 +170,15 @@ def build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
             low += 1
             risk_points += 2
 
-        if (r.get("key_type") or "") == "RSA":
+        if (r.get("key_type") or "").upper() == "RSA":
             rsa_count += 1
             risk_points += 3
 
     raw_score = 100 - risk_points
-    raw_score = max(0, min(100, raw_score))
+    if raw_score < 0:
+        raw_score = 0
+    if raw_score > 100:
+        raw_score = 100
 
     if raw_score >= 80:
         quantum_level = "low"
@@ -133,52 +202,144 @@ def build_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-# ---------- FastAPI app ----------
+def _initial_summary_for_running(targets: List[str]) -> Dict[str, Any]:
+    return {
+        "total": 0,
+        "high": 0,
+        "medium": 0,
+        "low": 0,
+        "errors": 0,
+        "expired": 0,
+        "expiring_soon": 0,
+        "rsa_count": 0,
+        "quantum_risk_score": None,
+        "quantum_risk_level": "unknown",
+        "note": f"Scan running. Targets queued: {len(targets)}",
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _scan_worker(scan_id: str, targets: List[str], max_workers: int):
+    """
+    Runs the scan in parallel and updates SCANS progress while running.
+    Saves final results+summary to SQLite when completed.
+    """
+    results: List[Dict[str, Any]] = []
+    total = len(targets)
+    done = 0
+
+    def set_progress(d: int, err: str = ""):
+        percent = int((d / total) * 100) if total > 0 else 100
+        with _SCANS_LOCK:
+            s = SCANS.get(scan_id)
+            if not s:
+                return
+            s["progress"] = {"total": total, "done": d, "percent": percent}
+            if err:
+                s["error"] = err
+            # keep partial results available (optional, useful for debugging)
+            s["results"] = list(results)
+
+    try:
+        set_progress(0)
+
+        max_workers = max(1, min(int(max_workers or DEFAULT_MAX_WORKERS), 64))
+        max_workers = min(max_workers, total) if total > 0 else 1
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = []
+            for t in targets:
+                host, port = parse_target(t)
+                if not host:
+                    continue
+                futs.append(ex.submit(scan_host, host, port))
+
+            for fut in as_completed(futs):
+                try:
+                    r = fut.result()
+                except Exception as e:
+                    r = {"host": "", "port": 443, "error": str(e), "findings": []}
+
+                results.append(r)
+                done += 1
+                set_progress(done)
+
+        summary = build_summary(results)
+
+        with _SCANS_LOCK:
+            s = SCANS.get(scan_id)
+            if s:
+                s["status"] = "completed"
+                s["results"] = results
+                s["summary"] = summary
+                s["progress"] = {"total": total, "done": total, "percent": 100}
+
+        save_scan(scan_id, "completed", SCANS[scan_id]["created_at"], results, summary)
+
+    except Exception as e:
+        err = str(e)
+        with _SCANS_LOCK:
+            s = SCANS.get(scan_id)
+            if s:
+                s["status"] = "failed"
+                s["error"] = err
+                if not s.get("summary"):
+                    s["summary"] = _initial_summary_for_running(targets)
+
+        # Persist failure state (keep empty results if needed)
+        try:
+            created_at = datetime.utcnow()
+            with _SCANS_LOCK:
+                if scan_id in SCANS:
+                    created_at = SCANS[scan_id].get("created_at") or created_at
+            save_scan(scan_id, "failed", created_at, results, _initial_summary_for_running(targets))
+        except Exception:
+            pass
+
+
+def _get_scan_from_store(scan_id: str) -> Dict[str, Any]:
+    with _SCANS_LOCK:
+        scan = SCANS.get(scan_id)
+        if scan:
+            return scan
+
+    scan = load_scan(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Backfill missing fields for older rows
+    if "progress" not in scan:
+        scan["progress"] = None
+    if "error" not in scan:
+        scan["error"] = ""
+
+    with _SCANS_LOCK:
+        SCANS[scan_id] = scan
+    return scan
+
+
+# -----------------------------
+# FastAPI app
+# -----------------------------
 app = FastAPI(
     title="PQC Scanner API",
-    description="Scan TLS endpoints + code ZIPs for PQC readiness signals and generate summaries/migration plans.",
-    version="1.0.0",
+    description="Scans TLS endpoints, flags risks, provides evidence-based findings and migration plans.",
+    version="0.5.0",
 )
 
-# CORS first
+# CORS (dev mode)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later when hosted
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---------- Config ----------
-API_KEY = os.getenv("PQC_API_KEY", "").strip()
-
-PROTECTED_PREFIXES = (
-    "/scan",
-    "/scans",
-    "/code-scan",
-)
-
-# Rate limiting (demo-safe)
-RATE_LIMIT_WINDOW_SECONDS = 60
-RATE_LIMIT_MAX_REQUESTS = 60
-_requests_by_ip = defaultdict(deque)
-
-# Target limits
-MAX_TARGETS = 200
-MAX_TARGET_LEN = 255
-
-
-def _validate_targets(targets: List[str]):
-    if len(targets) > MAX_TARGETS:
-        raise HTTPException(status_code=400, detail=f"Too many targets. Max is {MAX_TARGETS}.")
-    for t in targets:
-        if len(t) > MAX_TARGET_LEN:
-            raise HTTPException(status_code=400, detail="Target too long.")
-
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
-    # ✅ allow CORS preflight
+    # allow CORS preflight
     if request.method == "OPTIONS":
         return await call_next(request)
 
@@ -186,9 +347,7 @@ async def security_middleware(request: Request, call_next):
 
     # 1) API key check
     if API_KEY:
-        if path == "/health":
-            pass
-        else:
+        if path != "/health":
             if path in ("/docs", "/openapi.json", "/redoc"):
                 provided = request.headers.get("x-api-key", "")
                 if provided != API_KEY:
@@ -223,21 +382,9 @@ def health_check():
     return {"status": "ok"}
 
 
-# ---------- Helpers ----------
-def _get_scan_from_store(scan_id: str) -> Dict[str, Any]:
-    scan = SCANS.get(scan_id)
-    if scan:
-        return scan
-
-    scan = load_scan(scan_id)
-    if not scan:
-        raise HTTPException(status_code=404, detail="Scan not found")
-
-    SCANS[scan_id] = scan
-    return scan
-
-
-# ---------- TLS legacy endpoint ----------
+# -----------------------------
+# Legacy simple scan (sync)
+# -----------------------------
 @app.post("/scan")
 def scan_endpoints(request: ScanRequest):
     _validate_targets(request.targets)
@@ -245,28 +392,47 @@ def scan_endpoints(request: ScanRequest):
     return {"count": len(results), "results": results}
 
 
-# ---------- TLS scans with IDs ----------
+# -----------------------------
+# Scans with IDs + history + progress
+# -----------------------------
 @app.post("/scans", response_model=ScanStatus)
 def create_scan(request: ScanRequest):
     _validate_targets(request.targets)
 
     scan_id = str(uuid.uuid4())
     created_at = datetime.utcnow()
-    status = "completed"
 
-    results = run_scan(request.targets)
-    summary = build_summary(results)
+    # Create running scan entry immediately
+    with _SCANS_LOCK:
+        SCANS[scan_id] = {
+            "id": scan_id,
+            "status": "running",
+            "created_at": created_at,
+            "results": [],
+            "summary": _initial_summary_for_running(request.targets),
+            "progress": {"total": len(request.targets), "done": 0, "percent": 0},
+            "error": "",
+        }
 
-    SCANS[scan_id] = {
-        "id": scan_id,
-        "status": status,
-        "created_at": created_at,
-        "results": results,
-        "summary": summary,
-    }
+    # Save initial row so /scans shows it right away
+    save_scan(scan_id, "running", created_at, [], SCANS[scan_id]["summary"])
 
-    save_scan(scan_id, status, created_at, results, summary)
-    return ScanStatus(id=scan_id, status=status, created_at=created_at)
+    # Start background worker thread
+    max_workers = DEFAULT_MAX_WORKERS
+    t = threading.Thread(
+        target=_scan_worker,
+        args=(scan_id, request.targets, max_workers),
+        daemon=True,
+    )
+    t.start()
+
+    return ScanStatus(
+        id=scan_id,
+        status="running",
+        created_at=created_at,
+        progress={"total": len(request.targets), "done": 0, "percent": 0},
+        error="",
+    )
 
 
 @app.post("/scans/import", response_model=ScanStatus)
@@ -278,34 +444,60 @@ def import_scan(payload: ImportScanRequest):
     results = payload.results
     summary = build_summary(results)
 
-    SCANS[scan_id] = {
-        "id": scan_id,
-        "status": status,
-        "created_at": created_at,
-        "results": results,
-        "summary": summary,
-    }
+    with _SCANS_LOCK:
+        SCANS[scan_id] = {
+            "id": scan_id,
+            "status": status,
+            "created_at": created_at,
+            "results": results,
+            "summary": summary,
+            "progress": {"total": len(results), "done": len(results), "percent": 100},
+            "error": "",
+        }
 
     save_scan(scan_id, status, created_at, results, summary)
-    return ScanStatus(id=scan_id, status=status, created_at=created_at)
+    return ScanStatus(id=scan_id, status=status, created_at=created_at, progress={"total": len(results), "done": len(results), "percent": 100})
 
 
 @app.get("/scans/{scan_id}", response_model=ScanStatus)
 def get_scan_status(scan_id: str):
     scan = _get_scan_from_store(scan_id)
-    return ScanStatus(id=scan["id"], status=scan["status"], created_at=scan["created_at"])
+    return ScanStatus(
+        id=scan["id"],
+        status=scan["status"],
+        created_at=scan["created_at"],
+        progress=scan.get("progress"),
+        error=scan.get("error") or "",
+    )
 
 
 @app.get("/scans/{scan_id}/results", response_model=ScanWithResults)
 def get_scan_results(scan_id: str):
     scan = _get_scan_from_store(scan_id)
+
+    # If still running, compute a lightweight "current" summary for UI
+    if scan.get("status") == "running":
+        current_summary = build_summary(scan.get("results", []))
+    else:
+        current_summary = scan.get("summary") or build_summary(scan.get("results", []))
+
     return ScanWithResults(
         id=scan["id"],
         status=scan["status"],
         created_at=scan["created_at"],
-        results=scan["results"],
-        summary=scan["summary"],
+        results=scan.get("results", []),
+        summary=current_summary,
+        progress=scan.get("progress"),
+        error=scan.get("error") or "",
     )
+
+
+@app.get("/scans/{scan_id}/migration-plan")
+def tls_migration_plan(scan_id: str):
+    scan = _get_scan_from_store(scan_id)
+    if scan.get("status") != "completed":
+        raise HTTPException(status_code=409, detail="Scan not completed yet")
+    return build_migration_plan_tls(scan.get("results", []))
 
 
 @app.get("/scans", response_model=List[ScanListItem])
@@ -316,21 +508,15 @@ def list_scans_endpoint(limit: int = 20):
             id=row["id"],
             status=row["status"],
             created_at=row["created_at"],
-            summary=row["summary"],
+            summary=row.get("summary") or {},
         )
         for row in rows
     ]
 
 
-# ✅ THIS IS THE MISSING PIECE: TLS migration plan for a scan ID
-@app.get("/scans/{scan_id}/migration-plan")
-def tls_migration_plan(scan_id: str):
-    scan = _get_scan_from_store(scan_id)
-    results = scan.get("results", [])
-    return build_migration_plan_tls(results)
-
-
-# ---------- Code scanning ----------
+# -----------------------------
+# Code scan (ZIP upload)
+# -----------------------------
 @app.post("/code-scan", response_model=CodeScanResponse)
 async def code_scan(archive: UploadFile = File(...)):
     name = (archive.filename or "").lower()
@@ -341,7 +527,13 @@ async def code_scan(archive: UploadFile = File(...)):
     if not data:
         raise HTTPException(status_code=400, detail="Empty upload")
 
-    findings = scan_zip_bytes(data)
+    # Import here to avoid import-time crashes if environment mismatched
+    try:
+        from code_scanner import scan_zip_bytes
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"code_scanner import failed: {e}")
+
+    findings = scan_zip_bytes(data) or []
     return {"count": len(findings), "findings": findings}
 
 
@@ -355,5 +547,10 @@ async def code_migration_plan(archive: UploadFile = File(...)):
     if not data:
         raise HTTPException(status_code=400, detail="Empty upload")
 
-    findings = scan_zip_bytes(data)
+    try:
+        from code_scanner import scan_zip_bytes
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"code_scanner import failed: {e}")
+
+    findings = scan_zip_bytes(data) or []
     return build_migration_plan_code(findings)
