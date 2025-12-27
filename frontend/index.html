@@ -2,933 +2,364 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>PQC Scanner (TLS + Code) - Demo UI</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>PQC Scanner</title>
   <style>
-    :root{
-      --bg:#0b1020;
-      --card:rgba(255,255,255,.06);
-      --border:rgba(255,255,255,.10);
-      --muted:rgba(255,255,255,.68);
-      --text:rgba(255,255,255,.92);
-      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-      --shadow: 0 10px 30px rgba(0,0,0,.35);
-      --radius: 18px;
-      --accent: rgba(59,130,246,0.80);
-      --good: rgba(34,197,94,0.85);
-      --warn: rgba(245,158,11,0.90);
-      --bad:  rgba(239,68,68,0.88);
-      --crit: rgba(255, 51, 102, 0.95);
-    }
-    *{box-sizing:border-box}
-    body{
-      margin:0;
-      font-family:var(--sans);
-      background:
-        radial-gradient(1200px 700px at 20% 10%, rgba(59,130,246,.20), transparent 55%),
-        radial-gradient(900px 600px at 80% 0%, rgba(236,72,153,.18), transparent 50%),
-        radial-gradient(900px 700px at 70% 90%, rgba(34,197,94,.12), transparent 60%),
-        var(--bg);
-      color:var(--text);
-    }
-    .wrap{
-      max-width: 1180px;
-      margin: 28px auto;
-      padding: 0 16px 60px;
-    }
-    header{
-      display:flex;
-      align-items:flex-end;
-      justify-content:space-between;
-      gap: 14px;
-      margin-bottom: 18px;
-    }
-    .title{
-      display:flex;
-      flex-direction:column;
-      gap:6px;
-    }
-    h1{
-      margin:0;
-      font-size: 22px;
-      letter-spacing: .2px;
-    }
-    .sub{
-      color:var(--muted);
-      font-size: 13px;
-    }
-    .grid{
-      display:grid;
-      grid-template-columns: 1.2fr .8fr;
-      gap: 14px;
-      margin-top: 12px;
-    }
-    @media(max-width: 980px){
-      .grid{grid-template-columns: 1fr;}
-    }
-    .card{
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      box-shadow: var(--shadow);
-      padding: 14px;
-    }
-    .card h2{
-      margin: 0 0 10px 0;
-      font-size: 15px;
-      letter-spacing: .2px;
-    }
-    .row{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-      align-items:center;
-    }
-    label{
-      font-size: 12px;
-      color: var(--muted);
-      display:block;
-      margin-bottom: 6px;
-    }
-    input[type="text"], input[type="password"], textarea{
-      width:100%;
-      background: rgba(0,0,0,.20);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 10px 11px;
-      color: var(--text);
-      outline:none;
-    }
-    textarea{
-      min-height: 120px;
-      resize: vertical;
-      font-family: var(--mono);
-      font-size: 12.5px;
-      line-height: 1.35;
-    }
-    .btn{
-      border: 1px solid rgba(255,255,255,.14);
-      background: rgba(255,255,255,.08);
-      color: var(--text);
-      border-radius: 12px;
-      padding: 10px 12px;
-      cursor:pointer;
-      transition: .15s ease;
-      font-weight: 600;
-      font-size: 13px;
-    }
-    .btn:hover{ transform: translateY(-1px); background: rgba(255,255,255,.11); }
-    .btn.primary{
-      background: rgba(59,130,246,.26);
-      border-color: rgba(59,130,246,.30);
-    }
-    .btn.primary:hover{ background: rgba(59,130,246,.33); }
-    .btn.danger{
-      background: rgba(239,68,68,.14);
-      border-color: rgba(239,68,68,.22);
-    }
-    .btn.good{
-      background: rgba(34,197,94,.16);
-      border-color: rgba(34,197,94,.24);
-    }
-    .small{
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .pill{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
-      border: 1px solid var(--border);
-      background: rgba(0,0,0,.20);
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .status{
-      min-height: 18px;
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 8px;
-      white-space: pre-wrap;
-    }
-    .kpi{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-      margin-top: 10px;
-    }
-    .kpi .pill strong{ color: var(--text); }
-    table{
-      width:100%;
-      border-collapse: collapse;
-      margin-top: 10px;
-      overflow:hidden;
-      border-radius: 14px;
-      border: 1px solid var(--border);
-      background: rgba(0,0,0,.15);
-    }
-    th, td{
-      text-align:left;
-      padding: 10px 10px;
-      border-bottom: 1px solid rgba(255,255,255,.07);
-      font-size: 12.5px;
-      vertical-align: top;
-    }
-    th{
-      font-size: 12px;
-      color: var(--muted);
-      background: rgba(255,255,255,.03);
-      position: sticky;
-      top: 0;
-    }
-    tr:hover td{ background: rgba(255,255,255,.02); }
-    .mono{ font-family: var(--mono); font-size: 12px; }
-    .sev{
-      display:inline-flex;
-      align-items:center;
-      padding: 4px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: .2px;
-      border: 1px solid rgba(255,255,255,.10);
-    }
-    .sev.low{ background: rgba(34,197,94,.14); color: rgba(190,255,214,.95); border-color: rgba(34,197,94,.20); }
-    .sev.medium{ background: rgba(245,158,11,.14); color: rgba(255,234,200,.95); border-color: rgba(245,158,11,.22); }
-    .sev.high{ background: rgba(239,68,68,.14); color: rgba(255,210,210,.95); border-color: rgba(239,68,68,.22); }
-    .sev.critical{ background: rgba(255, 51, 102, .18); color: rgba(255,220,232,.98); border-color: rgba(255,  51, 102, .25); }
-
-    details.findings summary{
-      cursor:pointer;
-      list-style: none;
-      display:flex;
-      align-items:center;
-      gap:8px;
-      color: rgba(255,255,255,.88);
-      font-weight: 700;
-    }
-    details.findings summary::-webkit-details-marker{ display:none; }
-    .arrow{
-      width: 18px;
-      height: 18px;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      border-radius: 8px;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(255,255,255,.06);
-      font-size: 12px;
-      transform: rotate(0deg);
-      transition: transform .15s ease;
-    }
-    details.findings[open] .arrow{ transform: rotate(90deg); }
-
-    .findings-list{
-      margin: 10px 0 0 0;
-      padding: 0 0 0 18px;
-    }
-    .findings-list li{ margin: 10px 0; }
-
-    .findings-meta{
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .findings-evidence{
-      margin: 8px 0 0 0;
-      padding: 10px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.10);
-      background: rgba(0,0,0,0.22);
-      color: rgba(255,255,255,0.85);
-      font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1.35;
-      max-width: 560px;
-      overflow-x: auto;
-      white-space: pre;
-    }
-
-    .progressWrap{
-      display:none;
-      margin-top:10px;
-    }
-    .progressLabel{
-      font-size:12px;
-      color: rgba(255,255,255,.70);
-      margin-bottom: 6px;
-    }
-    .progressOuter{
-      height: 10px;
-      border: 1px solid rgba(255,255,255,.10);
-      border-radius: 999px;
-      overflow:hidden;
-      background: rgba(0,0,0,.18);
-    }
-    .progressBar{
-      height:100%;
-      width:0%;
-      background: var(--accent);
-      transition: width .2s ease;
-    }
-
-    .twoCol{
-      display:grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-    @media(max-width: 980px){
-      .twoCol{ grid-template-columns: 1fr; }
-    }
-
-    .mutedBox{
-      background: rgba(0,0,0,.18);
-      border: 1px dashed rgba(255,255,255,.14);
-      border-radius: 14px;
-      padding: 10px;
-      color: var(--muted);
-      font-size: 12px;
-      white-space: pre-wrap;
-      font-family: var(--mono);
-      max-height: 320px;
-      overflow:auto;
-    }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b1220;color:#e9eefc;margin:0}
+    header{padding:18px 22px;border-bottom:1px solid #1d2a44;background:#0d162a;position:sticky;top:0;z-index:10}
+    .wrap{max-width:1100px;margin:0 auto;padding:18px 22px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
+    label{font-size:12px;opacity:.85}
+    textarea,input{background:#0f1b33;color:#e9eefc;border:1px solid #243454;border-radius:10px;padding:10px;width:100%}
+    textarea{min-height:84px}
+    button{background:#4c7dff;border:0;color:white;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+    button.secondary{background:#223459}
+    button:disabled{opacity:.55;cursor:not-allowed}
+    .card{background:#0f1b33;border:1px solid #1f2f50;border-radius:14px;padding:14px}
+    .muted{opacity:.8}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    @media (max-width:900px){.grid{grid-template-columns:1fr}}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px 10px;border-bottom:1px solid #1b2946;vertical-align:top}
+    th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;opacity:.8}
+    .pill{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700}
+    .sev-critical{background:#ff3b3b;color:white}
+    .sev-high{background:#ff7a3b;color:#1a0d00}
+    .sev-medium{background:#ffd23b;color:#201800}
+    .sev-low{background:#41d17a;color:#04110a}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+    details{background:#0c162c;border:1px solid #1f2f50;border-radius:12px;padding:10px;margin-top:8px}
+    summary{cursor:pointer;font-weight:700}
+    pre{background:#071026;border:1px solid #1f2f50;border-radius:10px;padding:10px;overflow:auto}
+    .progress{height:10px;background:#091026;border:1px solid #1f2f50;border-radius:999px;overflow:hidden}
+    .progress > div{height:100%;background:#4c7dff;width:0%}
+    .tiny{font-size:12px}
   </style>
 </head>
 
 <body>
-<div class="wrap">
-  <header>
-    <div class="title">
-      <h1>PQC Scanner Platform (TLS + Code)</h1>
-      <div class="sub">Progress • Auto refresh • Auto migration plan • Confidence • Evidence</div>
+<header>
+  <div class="wrap">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <div>
+        <div style="font-size:18px;font-weight:800">PQC Scanner</div>
+        <div class="muted tiny">TLS crypto inventory + PQC relevance + migration guidance</div>
+      </div>
+      <div class="tiny muted" id="apiState"></div>
     </div>
-    <div class="pill"><span class="mono">Backend:</span> <span id="backendBadge" class="mono">-</span></div>
-  </header>
+  </div>
+</header>
+
+<div class="wrap">
 
   <div class="grid">
-    <!-- LEFT -->
     <div class="card">
-      <h2>1) Connect</h2>
+      <div style="font-weight:800;margin-bottom:8px">Run TLS scan</div>
 
-      <div class="twoCol">
-        <div>
-          <label>API Base URL</label>
-          <input id="apiBase" type="text" placeholder="http://127.0.0.1:8000" />
-        </div>
-        <div>
-          <label>API Key (x-api-key)</label>
-          <input id="apiKey" type="password" placeholder="leave empty if backend key disabled" />
-        </div>
-      </div>
-
-      <div class="row" style="margin-top:10px;">
-        <button class="btn good" id="saveCfg">Save</button>
-        <button class="btn" id="testHealth">Test /health</button>
-        <div class="small">If backend env <span class="mono">PQC_API_KEY</span> is set, you must enter the same key here.</div>
-      </div>
-
-      <div class="status" id="connStatus"></div>
-
-      <hr style="border:0;border-top:1px solid rgba(255,255,255,.08); margin: 14px 0;"/>
-
-      <h2>2) TLS Scan</h2>
-
-      <div class="twoCol">
-        <div>
-          <label>Targets (one per line). Supports <span class="mono">host</span> or <span class="mono">host:port</span></label>
-          <textarea id="targets" placeholder="google.com&#10;github.com&#10;example.com:443"></textarea>
-
-          <div class="row" style="margin-top:10px;">
-            <button class="btn primary" id="runScan">Run TLS Scan</button>
-            <button class="btn" id="refreshHistory">Refresh Recent Scans</button>
-          </div>
-
-          <div class="progressWrap" id="progressWrap">
-            <div class="progressLabel" id="progressText"></div>
-            <div class="progressOuter">
-              <div class="progressBar" id="progressBar"></div>
-            </div>
-          </div>
-
-          <div class="status" id="tlsStatus"></div>
-
-          <div class="row" style="margin-top:10px;">
-            <div style="flex:1;">
-              <label>Load Scan ID</label>
-              <input id="scanIdInput" class="mono" type="text" placeholder="paste scan id here"/>
-            </div>
-            <div style="display:flex;align-items:flex-end;gap:10px;">
-              <button class="btn" id="loadScanBtn">Load</button>
-              <button class="btn danger" id="clearBtn">Clear</button>
-            </div>
-          </div>
-
-          <div class="row" style="margin-top:10px;">
-            <button class="btn" id="loadMigrationBtn">TLS Migration Plan</button>
-          </div>
+      <div class="row">
+        <div style="flex:2;min-width:240px">
+          <label>Targets (one per line)</label>
+          <textarea id="targets" placeholder="google.com&#10;badssl.com:443&#10;incomplete-chain.badssl.com:443"></textarea>
         </div>
 
-        <div>
-          <label>Recent Scans</label>
-          <div class="small">Click an ID to load it.</div>
-          <table>
-            <thead>
-              <tr>
-                <th style="width:220px;">id</th>
-                <th style="width:100px;">status</th>
-                <th style="width:170px;">created_at</th>
-                <th>summary</th>
-              </tr>
-            </thead>
-            <tbody id="historyBody">
-              <tr><td colspan="4" class="small">No scans loaded yet.</td></tr>
-            </tbody>
-          </table>
+        <div style="flex:1;min-width:220px">
+          <label>API Key (optional)</label>
+          <input id="apiKey" placeholder="x-api-key header value"/>
+          <div class="tiny muted" style="margin-top:6px">Leave empty if PQC_API_KEY not set on backend.</div>
+        </div>
+
+        <div style="flex:0 0 auto">
+          <button id="btnScan">Start Scan</button>
         </div>
       </div>
 
-      <hr style="border:0;border-top:1px solid rgba(255,255,255,.08); margin: 14px 0;"/>
+      <div style="margin-top:12px">
+        <div class="tiny muted" id="scanStatusText">Idle.</div>
+        <div class="progress" style="margin-top:8px">
+          <div id="progressBar"></div>
+        </div>
+      </div>
 
-      <h2>3) TLS Results</h2>
-      <div class="kpi" id="kpis"></div>
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="secondary" id="btnLoadLatest">Load latest scan</button>
+        <button class="secondary" id="btnTLSPlan" disabled>Generate TLS Migration Plan</button>
+      </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th style="width:160px;">host</th>
-            <th style="width:70px;">port</th>
-            <th>tls</th>
-            <th>key</th>
-            <th>sig</th>
-            <th style="width:110px;">expiry</th>
-            <th style="width:110px;">risk</th>
-            <th style="width:110px;">PQC</th>
-            <th>findings</th>
-          </tr>
-        </thead>
-        <tbody id="resultsBody">
-          <tr><td colspan="9" class="small">Run a scan to see results.</td></tr>
-        </tbody>
-      </table>
-
-      <div style="margin-top:12px;">
-        <label>TLS Migration Plan Output</label>
-        <div id="tlsPlanBox" class="mutedBox">(auto loads after scan completes, or click button)</div>
+      <div class="tiny muted" style="margin-top:10px">
+        The scan auto-polls progress until completed, then loads results automatically.
       </div>
     </div>
 
-    <!-- RIGHT -->
     <div class="card">
-      <h2>4) Code Scan (ZIP)</h2>
-      <div class="small">Upload a ZIP of a repo/project. Backend scans source files.</div>
-
-      <div style="margin-top:10px;">
-        <label>ZIP File</label>
-        <input id="zipFile" type="file" accept=".zip"/>
-      </div>
-
-      <div class="row" style="margin-top:10px;">
-        <button class="btn primary" id="runCodeScan">Run Code Scan</button>
-        <button class="btn" id="runCodePlan">Code Migration Plan</button>
-      </div>
-
-      <div class="status" id="codeStatus"></div>
-
-      <div style="margin-top:12px;">
-        <label>Code Findings</label>
-        <table>
+      <div style="font-weight:800;margin-bottom:8px">Recent scans</div>
+      <div class="tiny muted" style="margin-bottom:8px">Click Load to view results.</div>
+      <div style="max-height:260px;overflow:auto">
+        <table id="historyTbl">
           <thead>
-            <tr>
-              <th style="width:110px;">severity</th>
-              <th style="width:140px;">type</th>
-              <th>file</th>
-              <th style="width:90px;">line</th>
-              <th>message</th>
-            </tr>
+          <tr>
+            <th style="width:36%">Scan ID</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Score</th>
+            <th></th>
+          </tr>
           </thead>
-          <tbody id="codeFindingsBody">
-            <tr><td colspan="5" class="small">Upload a ZIP and run Code Scan.</td></tr>
-          </tbody>
+          <tbody></tbody>
         </table>
-      </div>
-
-      <div style="margin-top:12px;">
-        <label>Code Migration Plan Output</label>
-        <div id="codePlanBox" class="mutedBox">(run “Code Migration Plan” to see recommended actions)</div>
       </div>
     </div>
   </div>
+
+  <div class="card" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
+      <div>
+        <div style="font-weight:800">Results</div>
+        <div class="tiny muted" id="summaryLine">No results loaded.</div>
+      </div>
+      <div class="tiny muted mono" id="activeScanId"></div>
+    </div>
+
+    <div style="overflow:auto;margin-top:10px">
+      <table id="resultsTbl">
+        <thead>
+        <tr>
+          <th>host</th>
+          <th>port</th>
+          <th>tls</th>
+          <th>key</th>
+          <th>sig</th>
+          <th>expiry</th>
+          <th>risk</th>
+          <th>PQC</th>
+          <th>details</th>
+        </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div style="font-weight:800;margin-bottom:8px">TLS Migration Plan</div>
+    <div class="tiny muted">Produces an ordered checklist based on findings across all endpoints.</div>
+    <div id="tlsPlanOut" style="margin-top:10px" class="tiny muted">No plan generated yet.</div>
+  </div>
+
 </div>
 
 <script>
-  const apiBaseEl = document.getElementById("apiBase");
-  const apiKeyEl  = document.getElementById("apiKey");
-  const backendBadge = document.getElementById("backendBadge");
-  const connStatus = document.getElementById("connStatus");
+  const API_BASE = "http://127.0.0.1:8000";
 
-  const targetsEl = document.getElementById("targets");
-  const tlsStatus = document.getElementById("tlsStatus");
-  const scanIdInput = document.getElementById("scanIdInput");
-
-  const progressWrap = document.getElementById("progressWrap");
-  const progressText = document.getElementById("progressText");
-  const progressBar  = document.getElementById("progressBar");
-
-  const historyBody = document.getElementById("historyBody");
-  const kpisEl = document.getElementById("kpis");
-  const resultsBody = document.getElementById("resultsBody");
-  const tlsPlanBox = document.getElementById("tlsPlanBox");
-
-  const zipFileEl = document.getElementById("zipFile");
-  const codeStatus = document.getElementById("codeStatus");
-  const codeFindingsBody = document.getElementById("codeFindingsBody");
-  const codePlanBox = document.getElementById("codePlanBox");
-
-  let API_BASE = localStorage.getItem("PQC_API_BASE") || "http://127.0.0.1:8000";
-  let API_KEY  = localStorage.getItem("PQC_API_KEY")  || "";
-  let lastScanId = "";
-
-  apiBaseEl.value = API_BASE;
-  apiKeyEl.value = API_KEY;
-  backendBadge.textContent = API_BASE;
-
-  function setConn(msg){ connStatus.textContent = msg || ""; }
-  function setTLS(msg){ tlsStatus.textContent = msg || ""; }
-  function setCode(msg){ codeStatus.textContent = msg || ""; }
-
-  function apiUrl(path){
-    return (API_BASE || "").replace(/\/+$/,"") + path;
+  function hdrs() {
+    const k = document.getElementById("apiKey").value.trim();
+    const h = {"Content-Type":"application/json"};
+    if (k) h["x-api-key"] = k;
+    return h;
   }
 
-  async function apiFetch(url, opts){
-    const o = opts || {};
-    o.headers = o.headers || {};
-    if (API_KEY && !o.headers["x-api-key"]) o.headers["x-api-key"] = API_KEY;
-    return fetch(url, o);
+  function sevPill(sev) {
+    const s = (sev||"LOW").toUpperCase();
+    let cls = "sev-low";
+    if (s==="CRITICAL") cls="sev-critical";
+    else if (s==="HIGH") cls="sev-high";
+    else if (s==="MEDIUM") cls="sev-medium";
+    return `<span class="pill ${cls}">${s}</span>`;
   }
 
-  function sevClass(sev){
-    const s = (sev || "").toLowerCase();
-    if (s.includes("critical")) return "critical";
-    if (s.includes("high")) return "high";
-    if (s.includes("medium")) return "medium";
-    return "low";
+  function setProgress(pct, text) {
+    document.getElementById("progressBar").style.width = `${pct}%`;
+    document.getElementById("scanStatusText").textContent = text;
   }
 
-  // ---------------------------
-  // Progress polling (FIXED + AUTO LOAD PLAN)
-  // ---------------------------
-  let progressTimer = null;
-
-  function stopProgress(){
-    if (progressTimer) clearInterval(progressTimer);
-    progressTimer = null;
-    progressWrap.style.display = "none";
-    progressBar.style.width = "0%";
-    progressText.textContent = "";
+  async function apiGet(path) {
+    const res = await fetch(API_BASE + path, {headers: hdrs()});
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
   }
 
-  async function pollProgress(scanId){
-    stopProgress();
-
-    progressWrap.style.display = "block";
-    progressText.textContent = "Progress: 0% (done 0/?) — status: starting";
-    progressBar.style.width = "0%";
-
-    async function tick(){
-      try{
-        const res = await apiFetch(apiUrl("/scans/" + encodeURIComponent(scanId)), {method:"GET"});
-        if(!res.ok){
-          if(res.status === 401){
-            progressText.textContent = "Progress: 401 Unauthorized (check API key)";
-          } else {
-            progressText.textContent = `Progress: error ${res.status}`;
-          }
-          return;
-        }
-
-        const data = await res.json();
-        const status = data.status || "unknown";
-        const prog = data.progress || {};
-        const total = prog.total ?? 0;
-        const done = prog.done ?? 0;
-        const percent = prog.percent ?? 0;
-
-        progressBar.style.width = (percent || 0) + "%";
-        progressText.textContent = `Progress: ${percent || 0}% (done ${done}/${total || "?"}) — status: ${status}`;
-
-        // Auto refresh results during scan
-        if(status === "running"){
-          await fetchTLSScanResults(scanId, true);
-          return;
-        }
-
-        // Completed: load final results + history + migration plan
-        if(status === "completed"){
-          await fetchTLSScanResults(scanId, false);
-          await fetchHistory();
-          await loadTLSMigrationPlan(scanId); // ✅ AUTO LOAD
-          stopProgress();
-        } else if(status === "failed"){
-          await fetchTLSScanResults(scanId, false);
-          await fetchHistory();
-          stopProgress();
-        }
-      } catch(e){
-        // ignore transient errors
-      }
-    }
-
-    await tick(); // immediate first tick
-    progressTimer = setInterval(tick, 1000);
+  async function apiPost(path, body) {
+    const res = await fetch(API_BASE + path, {method:"POST", headers: hdrs(), body: JSON.stringify(body)});
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
   }
 
-  // ---------------------------
-  // Connect controls
-  // ---------------------------
-  document.getElementById("saveCfg").onclick = () => {
-    API_BASE = apiBaseEl.value.trim() || "http://127.0.0.1:8000";
-    API_KEY = apiKeyEl.value.trim();
-    localStorage.setItem("PQC_API_BASE", API_BASE);
-    localStorage.setItem("PQC_API_KEY", API_KEY);
-    backendBadge.textContent = API_BASE;
-    setConn("Saved.");
-  };
+  function fmtDate(iso) {
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
+  }
 
-  document.getElementById("testHealth").onclick = async () => {
-    API_BASE = apiBaseEl.value.trim() || "http://127.0.0.1:8000";
-    API_KEY = apiKeyEl.value.trim();
-    backendBadge.textContent = API_BASE;
-    try{
-      const res = await fetch(apiUrl("/health"));
-      const data = await res.json();
-      setConn("Health OK: " + JSON.stringify(data));
-    }catch(e){
-      setConn("Health failed. Is backend running? " + e);
-    }
-  };
-
-  // ---------------------------
-  // Recent scans
-  // ---------------------------
-  async function fetchHistory(){
-    try{
-      const res = await apiFetch(apiUrl("/scans?limit=20"), {method:"GET"});
-      if(!res.ok){
-        historyBody.innerHTML = `<tr><td colspan="4" class="small">Failed to load scans (${res.status}).</td></tr>`;
-        return;
-      }
-      const rows = await res.json();
-      if(!rows || !rows.length){
-        historyBody.innerHTML = `<tr><td colspan="4" class="small">No scans yet.</td></tr>`;
-        return;
-      }
-      historyBody.innerHTML = rows.map(r => {
-        const sum = r.summary || {};
-        const summaryText = `total=${sum.total ?? "-"}, high=${sum.high ?? "-"}, qscore=${sum.quantum_risk_score ?? "-"}`;
-        return `
-          <tr>
-            <td class="mono"><a href="#" data-id="${r.id}" style="color:rgba(147,197,253,.95); text-decoration:none;">${r.id}</a></td>
-            <td class="mono">${r.status}</td>
-            <td class="mono">${(r.created_at || "").replace("T"," ").replace("Z","")}</td>
-            <td class="mono">${summaryText}</td>
-          </tr>
+  async function refreshHistory() {
+    try {
+      const list = await apiGet("/scans?limit=20");
+      const tb = document.querySelector("#historyTbl tbody");
+      tb.innerHTML = "";
+      for (const row of list) {
+        const score = row.summary?.quantum_risk_score ?? "";
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${row.id}</td>
+          <td>${row.status}</td>
+          <td class="tiny muted">${fmtDate(row.created_at)}</td>
+          <td>${score}</td>
+          <td><button class="secondary tiny" data-id="${row.id}">Load</button></td>
         `;
-      }).join("");
-
-      historyBody.querySelectorAll("a[data-id]").forEach(a => {
-        a.onclick = async (ev) => {
-          ev.preventDefault();
-          const id = a.getAttribute("data-id");
-          if(!id) return;
-          scanIdInput.value = id;
-          lastScanId = id;
-          setTLS("Loading scan " + id + " ...");
-          await fetchTLSScanResults(id, false);
-          pollProgress(id); // show progress if running
-        };
+        tb.appendChild(tr);
+      }
+      tb.querySelectorAll("button[data-id]").forEach(btn=>{
+        btn.addEventListener("click", ()=> loadScan(btn.getAttribute("data-id")));
       });
-    }catch(e){
-      historyBody.innerHTML = `<tr><td colspan="4" class="small">History error: ${String(e)}</td></tr>`;
+    } catch(e) {
+      // ignore if backend down
     }
   }
 
-  // ---------------------------
-  // TLS scan create
-  // ---------------------------
-  async function runTLSScan(){
-    stopProgress();
-    tlsPlanBox.textContent = "(auto loads after scan completes, or click button)";
-    kpisEl.innerHTML = "";
-    resultsBody.innerHTML = `<tr><td colspan="9" class="small">Starting scan...</td></tr>`;
+  function buildFindingsBlock(findings) {
+    if (!findings || findings.length === 0) return `<div class="tiny muted">No findings.</div>`;
 
-    API_BASE = apiBaseEl.value.trim() || "http://127.0.0.1:8000";
-    API_KEY = apiKeyEl.value.trim();
-    backendBadge.textContent = API_BASE;
-
-    const targets = (targetsEl.value || "")
-      .split("\n").map(s => s.trim()).filter(Boolean);
-
-    if(!targets.length){
-      setTLS("Add at least one target.");
-      return;
-    }
-
-    setTLS("Creating scan...");
-    try{
-      const res = await apiFetch(apiUrl("/scans"), {
-        method:"POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({targets})
-      });
-
-      if(!res.ok){
-        const text = await res.text();
-        setTLS(`Failed to create scan (${res.status}). ${text}`);
-        resultsBody.innerHTML = `<tr><td colspan="9" class="small">Scan failed.</td></tr>`;
-        return;
-      }
-
-      const data = await res.json();
-      lastScanId = data.id;
-      scanIdInput.value = lastScanId;
-      setTLS("Scan started: " + lastScanId);
-
-      await fetchHistory();
-      pollProgress(lastScanId); // ✅ show progress + auto refresh + auto plan
-
-    }catch(e){
-      setTLS("Failed to create scan. Is the backend running? " + e);
-      resultsBody.innerHTML = `<tr><td colspan="9" class="small">Scan failed.</td></tr>`;
-    }
-  }
-
-  async function fetchTLSScanResults(scanId, silent){
-    try{
-      const res = await apiFetch(apiUrl("/scans/" + encodeURIComponent(scanId) + "/results"), {method:"GET"});
-      if(!res.ok){
-        if(!silent) setTLS(`Failed to load scan results (${res.status}).`);
-        return;
-      }
-      const data = await res.json();
-      const results = data.results || [];
-      const summary = data.summary || {};
-      if(!silent){
-        setTLS(`Loaded scan ${scanId} (status=${data.status}, results=${results.length}).`);
-      }
-      renderKPIs(summary);
-      renderTLSResults(results);
-    }catch(e){
-      if(!silent) setTLS("Error loading results: " + e);
-    }
-  }
-
-  async function loadTLSMigrationPlan(scanId){
-    tlsPlanBox.textContent = "Loading TLS migration plan...";
-    try{
-      const res = await apiFetch(apiUrl("/scans/" + encodeURIComponent(scanId) + "/migration-plan"), {method:"GET"});
-      if(!res.ok){
-        const t = await res.text();
-        tlsPlanBox.textContent = `Failed (${res.status}): ${t}`;
-        return;
-      }
-      const plan = await res.json();
-      tlsPlanBox.textContent = JSON.stringify(plan, null, 2);
-    }catch(e){
-      tlsPlanBox.textContent = "Error: " + e;
-    }
-  }
-
-  function renderKPIs(summary){
-    if(!summary || typeof summary !== "object"){
-      kpisEl.innerHTML = "";
-      return;
-    }
-    const pills = [
-      ["total", summary.total],
-      ["high", summary.high],
-      ["medium", summary.medium],
-      ["low", summary.low],
-      ["errors", summary.errors],
-      ["RSA", summary.rsa_count],
-      ["qScore", summary.quantum_risk_score],
-      ["qLevel", summary.quantum_risk_level],
-    ];
-    kpisEl.innerHTML = pills.map(([k,v]) => `
-      <div class="pill"><span class="mono">${k}:</span> <strong class="mono">${(v==null?"-":v)}</strong></div>
-    `).join("");
-  }
-
-  function renderTLSResults(results){
-    if(!results || !results.length){
-      resultsBody.innerHTML = `<tr><td colspan="9" class="small">No results yet (scan running or empty).</td></tr>`;
-      return;
-    }
-
-    resultsBody.innerHTML = results.map(r => {
-      const host = r.host || "";
-      const port = r.port == null ? "" : r.port;
-      const tls = r.tls_version || (r.tls_supported_versions ? (r.tls_supported_versions.join(",") || "-") : "-");
-      const key = (r.key_type || "-") + (r.key_detail ? (" / " + r.key_detail) : "");
-      const sig = r.sig_algorithm || "-";
-      const expiry = (r.days_until_expiry != null ? (r.days_until_expiry + "d") : "-");
-      const risk = r.risk_level || r.risk || "-";
-      const findings = r.findings || [];
-
-      const riskClass = sevClass(risk);
-      const pqcClass = sevClass(r.pqc_relevance || "");
-
-      const findingsHtml = findings.length ? `
-        <details class="findings">
-          <summary><span class="arrow">›</span><span class="mono">${findings.length} finding(s)</span></summary>
-          <ol class="findings-list">
-            ${findings.map(f => {
-              const sev = (f.severity || "").toUpperCase();
-              const title = (f.title || f.message || f.rule_id || "Finding");
-              const rid = (f.rule_id || "");
-              const fix = (f.remediation || f.recommendation || "");
-
-              const conf = (f.confidence || f.confidence_level || "");
-              const confReason = (f.confidence_reason || "");
-              const evidence = (f.evidence || {});
-
-              let evText = "";
-              try{
-                if(evidence && Object.keys(evidence).length){
-                  evText = JSON.stringify(evidence, null, 2);
-                }
-              }catch(e){ evText = ""; }
-
-              const confLine = conf ? `
-                <div class="findings-meta"><strong>Confidence:</strong> ${conf}${confReason ? " — " + confReason : ""}</div>
-              ` : "";
-
-              const evBlock = evText ? `<pre class="findings-evidence">${evText}</pre>` : "";
-
-              return `
-                <li>
-                  <strong>${sev}</strong> ${title}
-                  <div class="findings-meta">${rid}${fix ? " • Fix: " + fix : ""}</div>
-                  ${confLine}
-                  ${evBlock}
-                </li>
-              `;
-            }).join("")}
-          </ol>
-        </details>
-      ` : `<span class="small">—</span>`;
-
-      return `
-        <tr>
-          <td class="mono">${host}</td>
-          <td class="mono">${port}</td>
-          <td class="mono">${tls}</td>
-          <td class="mono">${key}</td>
-          <td class="mono">${sig}</td>
-          <td class="mono">${expiry}</td>
-          <td><span class="sev ${riskClass}">${String(risk).toUpperCase()}</span></td>
-          <td><span class="sev ${pqcClass}">${String(r.pqc_relevance || "-").toUpperCase()}</span></td>
-          <td>${findingsHtml}</td>
-        </tr>
+    let html = `<details><summary>${findings.length} finding(s)</summary>`;
+    for (const f of findings) {
+      const sev = (f.severity||"LOW").toUpperCase();
+      html += `
+        <div style="margin-top:10px">
+          ${sevPill(sev)} <span style="font-weight:800">${escapeHtml(f.title||f.id)}</span><br/>
+          <span class="mono">${escapeHtml(f.id||"")}</span>
+          <span class="muted"> • Fix:</span> ${escapeHtml(f.fix||"")}
+          <div class="tiny muted" style="margin-top:6px">
+            Confidence: <b>${escapeHtml(f.confidence||"")}</b> — ${escapeHtml(f.confidence_reason||"")}
+          </div>
+          <pre class="mono">${escapeHtml(JSON.stringify(f.evidence||{}, null, 2))}</pre>
+          <div class="tiny muted">${escapeHtml(f.pqc_note||"")}</div>
+        </div>
       `;
-    }).join("");
+    }
+    html += `</details>`;
+    return html;
   }
 
-  // Buttons
-  document.getElementById("runScan").onclick = runTLSScan;
-  document.getElementById("refreshHistory").onclick = fetchHistory;
-
-  document.getElementById("loadScanBtn").onclick = async () => {
-    const id = (scanIdInput.value || "").trim();
-    if(!id){ setTLS("Paste a scan id first."); return; }
-    lastScanId = id;
-    setTLS("Loading scan " + id + " ...");
-    await fetchTLSScanResults(id, false);
-    pollProgress(id);
-  };
-
-  document.getElementById("loadMigrationBtn").onclick = async () => {
-    const id = (scanIdInput.value || lastScanId || "").trim();
-    if(!id){ setTLS("Load a scan ID first."); return; }
-    await loadTLSMigrationPlan(id);
-  };
-
-  document.getElementById("clearBtn").onclick = () => {
-    stopProgress();
-    lastScanId = "";
-    scanIdInput.value = "";
-    setTLS("");
-    kpisEl.innerHTML = "";
-    tlsPlanBox.textContent = "(auto loads after scan completes, or click button)";
-    resultsBody.innerHTML = `<tr><td colspan="9" class="small">Cleared. Run a scan to see results.</td></tr>`;
-  };
-
-  // Code scan
-  async function postZip(endpoint){
-    const f = (zipFileEl.files && zipFileEl.files[0]) ? zipFileEl.files[0] : null;
-    if(!f){
-      setCode("Select a .zip file first.");
-      return null;
-    }
-    const fd = new FormData();
-    fd.append("archive", f);
-
-    const res = await apiFetch(apiUrl(endpoint), {method:"POST", body: fd});
-    if(!res.ok){
-      const t = await res.text();
-      setCode(`Failed (${res.status}): ${t}`);
-      return null;
-    }
-    return res.json();
+  function escapeHtml(s) {
+    return String(s||"")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll("\"","&quot;")
+      .replaceAll("'","&#039;");
   }
 
-  function renderCodeFindings(findings){
-    if(!findings || !findings.length){
-      codeFindingsBody.innerHTML = `<tr><td colspan="5" class="small">No findings.</td></tr>`;
-      return;
-    }
-    codeFindingsBody.innerHTML = findings.map(f => {
-      const sev = (f.severity || "").toLowerCase();
-      const type = f.type || f.rule_id || "-";
-      const file = f.file || f.path || "-";
-      const line = (f.line == null ? "-" : f.line);
-      const msg = f.message || f.title || "-";
-      return `
-        <tr>
-          <td><span class="sev ${sevClass(sev)}">${(sev || "low").toUpperCase()}</span></td>
-          <td class="mono">${String(type)}</td>
-          <td class="mono">${String(file)}</td>
-          <td class="mono">${String(line)}</td>
-          <td>${String(msg)}</td>
-        </tr>
+  function renderResults(scan) {
+    const tb = document.querySelector("#resultsTbl tbody");
+    tb.innerHTML = "";
+
+    const sum = scan.summary || {};
+    document.getElementById("summaryLine").textContent =
+      `Quantum score ${sum.quantum_risk_score ?? ""}/100 (${sum.quantum_risk_level ?? ""}), total=${sum.total ?? ""}, critical=${sum.critical ?? 0}, high=${sum.high ?? 0}, medium=${sum.medium ?? 0}, low=${sum.low ?? 0}`;
+
+    document.getElementById("activeScanId").textContent = `active scan: ${scan.id}`;
+
+    for (const r of (scan.results||[])) {
+      const expiry = (r.days_until_expiry==null) ? "" : `${r.days_until_expiry}d`;
+      const risk = (r.risk||"").toLowerCase();
+      const level = (r.risk_level||"low").toLowerCase();
+      const pqc = (r.pqc_relevance||"").toUpperCase();
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="mono">${escapeHtml(r.host)}</td>
+        <td>${escapeHtml(r.port)}</td>
+        <td>${escapeHtml(r.tls_version)}</td>
+        <td>${escapeHtml(r.key_detail||"")}</td>
+        <td>${escapeHtml(r.sig_algorithm||"")}</td>
+        <td>${escapeHtml(expiry)}</td>
+        <td>${sevPill(level.toUpperCase())}</td>
+        <td>${escapeHtml(pqc)}</td>
+        <td>
+          <div class="tiny muted">${escapeHtml(r.pqc_recommendation||"")}</div>
+          ${buildFindingsBlock(r.findings)}
+        </td>
       `;
-    }).join("");
+      tb.appendChild(tr);
+    }
+
+    document.getElementById("btnTLSPlan").disabled = false;
   }
 
-  document.getElementById("runCodeScan").onclick = async () => {
-    setCode("Uploading ZIP and scanning...");
-    codePlanBox.textContent = "(run “Code Migration Plan” to see recommended actions)";
-    const data = await postZip("/code-scan");
-    if(!data) return;
-    setCode(`Code scan OK. Findings: ${data.count ?? (data.findings ? data.findings.length : 0)}`);
-    renderCodeFindings(data.findings || []);
-  };
+  async function loadScan(scanId) {
+    const scan = await apiGet(`/scans/${scanId}/results`);
+    renderResults(scan);
+    window.__ACTIVE_SCAN_ID__ = scanId;
+  }
 
-  document.getElementById("runCodePlan").onclick = async () => {
-    setCode("Uploading ZIP and building migration plan...");
-    const plan = await postZip("/code-scan/migration-plan");
-    if(!plan) return;
-    setCode("Code migration plan OK.");
-    codePlanBox.textContent = JSON.stringify(plan, null, 2);
-  };
+  async function pollProgress(scanId) {
+    while (true) {
+      const st = await apiGet(`/scans/${scanId}`);
+      const p = st.progress || {total:0, done:0, percent:0};
+      setProgress(p.percent||0, `Scan ${st.status}: ${p.done}/${p.total} (${p.percent}%)`);
 
-  // initial load
-  fetchHistory();
+      if (st.status === "completed") {
+        const scan = await apiGet(`/scans/${scanId}/results`);
+        renderResults(scan);
+        return;
+      }
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+
+  document.getElementById("btnScan").addEventListener("click", async ()=>{
+    try {
+      const raw = document.getElementById("targets").value.trim();
+      const targets = raw.split("\n").map(x=>x.trim()).filter(Boolean);
+      if (!targets.length) return alert("Add at least one target.");
+
+      setProgress(0, "Creating scan...");
+      const st = await apiPost("/scans", {targets});
+      window.__ACTIVE_SCAN_ID__ = st.id;
+      await refreshHistory();
+      await pollProgress(st.id);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to create scan. Is the backend running and API key correct?");
+      setProgress(0, "Idle.");
+    }
+  });
+
+  document.getElementById("btnLoadLatest").addEventListener("click", async ()=>{
+    const list = await apiGet("/scans?limit=1");
+    if (!list.length) return alert("No scans yet.");
+    await loadScan(list[0].id);
+  });
+
+  document.getElementById("btnTLSPlan").addEventListener("click", async ()=>{
+    try {
+      const id = window.__ACTIVE_SCAN_ID__;
+      if (!id) return alert("No active scan loaded.");
+      const plan = await apiGet(`/scans/${id}/migration-plan`);
+      const items = plan.items || [];
+      if (!items.length) {
+        document.getElementById("tlsPlanOut").innerHTML = `<div class="tiny muted">(No plan items returned)</div>`;
+        return;
+      }
+      let html = "";
+      for (const it of items) {
+        html += `
+          <details>
+            <summary>${sevPill(it.severity)} <span style="font-weight:800">${escapeHtml(it.title)}</span> <span class="mono">${escapeHtml(it.rule_id)}</span></summary>
+            <div style="margin-top:10px" class="tiny">
+              <div><b>Fix:</b> ${escapeHtml(it.fix||"")}</div>
+              <div class="muted" style="margin-top:8px">${escapeHtml(it.pqc_note||"")}</div>
+              <div class="muted" style="margin-top:8px"><b>Affected:</b> ${escapeHtml((it.affected||[]).length)} endpoint(s)</div>
+              <pre class="mono">${escapeHtml(JSON.stringify(it.affected||[], null, 2))}</pre>
+            </div>
+          </details>
+        `;
+      }
+      document.getElementById("tlsPlanOut").innerHTML = html;
+    } catch(e) {
+      console.error(e);
+      document.getElementById("tlsPlanOut").innerHTML = `<div class="tiny muted">Failed: ${escapeHtml(String(e))}</div>`;
+    }
+  });
+
+  // Initial load
+  refreshHistory();
+  setInterval(refreshHistory, 4000);
 </script>
-
 </body>
 </html>
