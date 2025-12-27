@@ -1,319 +1,273 @@
-from typing import Dict, Any, List, Callable, Optional
+# policy.py
+from __future__ import annotations
 
-Severity = str  # "critical" | "high" | "medium" | "low"
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-RuleWhen = Callable[[Dict[str, Any]], bool]
-RuleEvidence = Callable[[Dict[str, Any]], Dict[str, Any]]
+Severity = str  # "critical"|"high"|"medium"|"low"
 
-
-def _sev_rank(sev: Severity) -> int:
-    return {"critical": 0, "high": 1, "medium": 2, "low": 3}.get((sev or "low").lower(), 9)
-
-
-def _sev_points(sev: Severity) -> int:
-    # scoring: bigger = worse
-    return {"critical": 12, "high": 8, "medium": 4, "low": 1}.get((sev or "low").lower(), 0)
+_SEV_ORDER = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
-def _supported_versions(facts: Dict[str, Any]) -> List[str]:
-    v = facts.get("tls_supported_versions") or []
-    return v if isinstance(v, list) else []
+@dataclass(frozen=True)
+class Rule:
+    id: str
+    title: str
+    severity: Severity
+    fix: str
+    pqc_note: str
+    confidence: str  # "high"|"medium"|"low"
+    confidence_reason: str
+    when: Callable[[Dict[str, Any]], bool]
+    evidence: Callable[[Dict[str, Any]], Dict[str, Any]]
 
 
-def _weak_accepted(facts: Dict[str, Any]) -> List[str]:
-    v = facts.get("tls12_weak_accepted_ciphers") or []
-    return v if isinstance(v, list) else []
+def _sev_rank(sev: str) -> int:
+    return _SEV_ORDER.get((sev or "").lower(), 0)
 
 
-def _chain_issues(facts: Dict[str, Any]) -> List[str]:
-    v = facts.get("chain_issues") or []
-    # scanner stores list[str]
-    return v if isinstance(v, list) else []
-
-
-def make_finding(
-    rule_id: str,
-    title: str,
-    severity: Severity,
-    remediation: str,
-    pqc_mapping: str,
-    confidence: str,
-    confidence_reason: str,
-    evidence: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return {
-        "rule_id": rule_id,
-        "title": title,
-        "severity": (severity or "low").lower(),
-        "remediation": remediation,
-        "pqc_mapping": pqc_mapping,
-        "confidence": (confidence or "medium").lower(),
-        "confidence_reason": confidence_reason or "",
-        "evidence": evidence or {},
-    }
-
-
-# -------------------------
-# Rules registry (data-driven)
-# -------------------------
-RULES: List[Dict[str, Any]] = [
-    # ---- TLS protocol posture ----
-    {
-        "id": "LEGACY_TLS_SUPPORTED",
-        "title": "Legacy TLS versions supported",
-        "severity": "critical",
-        "when": lambda f: ("TLSv1.0" in _supported_versions(f)) or ("TLSv1.1" in _supported_versions(f)),
-        "evidence": lambda f: {"supported_versions": _supported_versions(f)},
-        "remediation": "Disable TLS 1.0/1.1. Require TLS 1.2+ and prefer TLS 1.3.",
-        "pqc_mapping": "Crypto-agility prerequisite for PQC/hybrid TLS rollout.",
-        "confidence": "high",
-        "confidence_reason": "Derived from active protocol negotiation probes.",
-    },
-    {
-        "id": "NO_TLS13",
-        "title": "TLS 1.3 not supported",
-        "severity": "high",
-        "when": lambda f: ("TLSv1.3" not in _supported_versions(f)) and bool(_supported_versions(f)),
-        "evidence": lambda f: {"supported_versions": _supported_versions(f)},
-        "remediation": "Enable TLS 1.3 on the termination layer (Nginx/Envoy/ALB/IIS) and upgrade crypto libraries.",
-        "pqc_mapping": "TLS 1.3 is the typical base for hybrid / PQC-ready deployment paths.",
-        "confidence": "high",
-        "confidence_reason": "Based on protocol probes; false positives are rare when probes succeed.",
-    },
-
-    # ---- Cipher posture ----
-    {
-        "id": "WEAK_CIPHER_ACCEPTED",
-        "title": "Weak TLS 1.2 ciphers accepted by server",
-        "severity": "critical",
-        "when": lambda f: len(_weak_accepted(f)) > 0,
-        "evidence": lambda f: {"weak_accepted_ciphers": _weak_accepted(f)},
-        "remediation": "Remove weak suites (RC4/3DES/NULL/EXPORT/MD5). Keep only ECDHE + AES-GCM/CHACHA20.",
-        "pqc_mapping": "Baseline hardening should be done before any PQC/hybrid rollout.",
-        "confidence": "high",
-        "confidence_reason": "Detected by active cipher negotiation attempts against the server.",
-    },
-    {
-        "id": "NO_FORWARD_SECRECY",
-        "title": "Forward secrecy not observed/likely disabled",
-        "severity": "medium",
-        "when": lambda f: (f.get("forward_secrecy_possible") is False),
-        "evidence": lambda f: {
-            "cipher_name": f.get("cipher_name", ""),
-            "tls_version": f.get("tls_version", ""),
-            "forward_secrecy_possible": f.get("forward_secrecy_possible"),
-        },
-        "remediation": "Prefer ECDHE/DHE cipher suites to ensure forward secrecy for TLS 1.2, and migrate to TLS 1.3.",
-        "pqc_mapping": "FS hygiene reduces blast radius during algorithm transitions.",
-        "confidence": "medium",
-        "confidence_reason": "Inference from negotiated cipher; verify with a full cipher sweep if critical.",
-    },
-
-    # ---- Certificate and chain posture ----
-    {
-        "id": "CERT_EXPIRED",
-        "title": "Certificate expired",
-        "severity": "critical",
-        "when": lambda f: bool((f.get("days_until_expiry") is not None) and (f.get("days_until_expiry") < 0)),
-        "evidence": lambda f: {"days_until_expiry": f.get("days_until_expiry"), "not_after": f.get("not_after")},
-        "remediation": "Renew/replace the certificate immediately. Fix automation to avoid recurrence.",
-        "pqc_mapping": "Operational hygiene is required before PQC migration planning.",
-        "confidence": "high",
-        "confidence_reason": "Computed directly from X.509 validity timestamps.",
-    },
-    {
-        "id": "CERT_EXPIRING_SOON",
-        "title": "Certificate expiring soon",
-        "severity": "high",
-        "when": lambda f: bool((f.get("days_until_expiry") is not None) and (0 <= f.get("days_until_expiry") <= 30)),
-        "evidence": lambda f: {"days_until_expiry": f.get("days_until_expiry"), "not_after": f.get("not_after")},
-        "remediation": "Renew/replace the certificate within 30 days. Ensure rotation automation.",
-        "pqc_mapping": "Upcoming rotations are a good window to introduce crypto-agility improvements.",
-        "confidence": "high",
-        "confidence_reason": "Computed directly from X.509 validity timestamps.",
-    },
-    {
-        "id": "CHAIN_ISSUES_PRESENT",
-        "title": "Certificate chain issues detected",
-        "severity": "medium",
-        "when": lambda f: len(_chain_issues(f)) > 0,
-        "evidence": lambda f: {"chain_issues": _chain_issues(f), "chain_length": f.get("chain_length")},
-        "remediation": "Fix chain linkage/intermediate CA constraints and ensure proper chain delivery.",
-        "pqc_mapping": "Clean PKI chain reduces migration surprises and operational risk.",
-        "confidence": "medium",
-        "confidence_reason": "Chain analysis is best-effort; validate with openssl s_client if critical.",
-    },
-    {
-        "id": "VERIFY_FAILED",
-        "title": "TLS verification failed (trust/hostname/chain)",
-        "severity": "medium",
-        "when": lambda f: bool((f.get("verify_error") or "").strip()),
-        "evidence": lambda f: {"verify_error": f.get("verify_error", ""), "verify_mode": f.get("verify_mode", "")},
-        "remediation": "Fix chain/hostname/trust issues. Ensure intermediates are served and SAN matches host.",
-        "pqc_mapping": "Trust failures block reliable inventory and complicate PQC migration planning.",
-        "confidence": "high",
-        "confidence_reason": "Direct error returned by verified TLS handshake attempt.",
-    },
-    {
-        "id": "CERT_HOSTNAME_MISMATCH",
-        "title": "Certificate hostname/SAN mismatch",
-        "severity": "high",
-        "when": lambda f: (f.get("hostname_match") is False),
-        "evidence": lambda f: {
-            "hostname_match": f.get("hostname_match"),
-            "san_dns": f.get("san_dns", []),
-            "common_name": f.get("common_name", ""),
-        },
-        "remediation": "Issue a certificate that matches the exact hostname (SAN) and deploy it on the correct endpoint.",
-        "pqc_mapping": "Accurate endpoint identity is required before PQC/hybrid TLS rollout.",
-        "confidence": "high",
-        "confidence_reason": "Match computed from certificate SAN/CN vs scanned host.",
-    },
-    {
-        "id": "CERT_NO_OCSP_AIA",
-        "title": "No OCSP responder advertised (AIA)",
-        "severity": "low",
-        "when": lambda f: not bool(f.get("ocsp_aia_uris")),
-        "evidence": lambda f: {"ocsp_aia_uris": f.get("ocsp_aia_uris", [])},
-        "remediation": "Consider using OCSP/AIA (and stapling where appropriate) for stronger revocation posture.",
-        "pqc_mapping": "Revocation posture matters more as certificate strategies evolve for PQC.",
-        "confidence": "high",
-        "confidence_reason": "Extracted from Authority Information Access extension if present.",
-    },
-    {
-        "id": "CERT_NO_CRL_DP",
-        "title": "No CRL distribution points advertised",
-        "severity": "low",
-        "when": lambda f: not bool(f.get("crl_distribution_points")),
-        "evidence": lambda f: {"crl_distribution_points": f.get("crl_distribution_points", [])},
-        "remediation": "Consider publishing CRL distribution points to improve revocation coverage.",
-        "pqc_mapping": "Revocation posture matters more as certificate strategies evolve for PQC.",
-        "confidence": "medium",
-        "confidence_reason": "Extracted from CRL Distribution Points extension when available; not always required.",
-    },
-
-    # ---- PQC relevance ----
-    {
-        "id": "PQC_RSA_ENDPOINT",
-        "title": "RSA public key detected (quantum-vulnerable class)",
-        "severity": "high",
-        "when": lambda f: (f.get("key_type") == "RSA"),
-        "evidence": lambda f: {"key_type": f.get("key_type"), "key_detail": f.get("key_detail")},
-        "remediation": "Inventory RSA usage and plan migration to PQC/hybrid approaches.",
-        "pqc_mapping": "RSA -> Kyber (KEM) + Dilithium/Falcon (signatures) in a crypto-agile design.",
-        "confidence": "high",
-        "confidence_reason": "Public key algorithm extracted from the presented X.509 certificate.",
-    },
-    {
-        "id": "PQC_EC_ENDPOINT",
-        "title": "Elliptic-curve public key detected (quantum-vulnerable class)",
-        "severity": "medium",
-        "when": lambda f: (f.get("key_type") == "EC"),
-        "evidence": lambda f: {"key_type": f.get("key_type"), "curve": f.get("key_detail")},
-        "remediation": "Inventory ECC usage and plan migration to PQC/hybrid approaches.",
-        "pqc_mapping": "ECDH/ECDSA -> Kyber (KEM) + Dilithium/Falcon (signatures) in a crypto-agile design.",
-        "confidence": "high",
-        "confidence_reason": "Public key algorithm extracted from the presented X.509 certificate.",
-    },
-
-    # ---- Optional posture (useful for enterprise reports) ----
-    {
-        "id": "HSTS_MISSING",
-        "title": "HSTS header not observed",
-        "severity": "low",
-        "when": lambda f: (f.get("hsts_present") is False),
-        "evidence": lambda f: {"hsts_present": f.get("hsts_present"), "hsts": f.get("hsts", "")},
-        "remediation": "Consider enabling Strict-Transport-Security with an appropriate max-age (and includeSubDomains if safe).",
-        "pqc_mapping": "Not directly PQC, but strengthens transport posture and reduces downgrade risk.",
-        "confidence": "medium",
-        "confidence_reason": "Best-effort HTTP(S) HEAD probe; redirects/CDNs may affect observation.",
-    },
-    {
-        "id": "SNI_REQUIRED",
-        "title": "SNI appears required for correct certificate",
-        "severity": "low",
-        "when": lambda f: bool(f.get("sni_required")),
-        "evidence": lambda f: {"sni_required": f.get("sni_required")},
-        "remediation": "Ensure scanners/clients provide SNI; document front-door hostname routing.",
-        "pqc_mapping": "Scan accuracy depends on correct SNI during inventory and migration planning.",
-        "confidence": "medium",
-        "confidence_reason": "Observed difference between handshake with SNI vs without SNI.",
-    },
-]
-
-
-def evaluate_policies(facts: Dict[str, Any]) -> List[Dict[str, Any]]:
+def evaluate_findings(facts: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Convert facts -> ordered findings list.
+    Each finding is stable and UI-friendly:
+      - id, severity, title, fix
+      - confidence, confidence_reason
+      - evidence (machine-readable)
+      - pqc_note
+    """
     findings: List[Dict[str, Any]] = []
-    for r in RULES:
-        when: RuleWhen = r["when"]
-        if when(facts):
-            ev_fn: RuleEvidence = r.get("evidence", lambda f: {})
-            ev = ev_fn(facts)
-            findings.append(
-                make_finding(
-                    rule_id=r["id"],
-                    title=r["title"],
-                    severity=r["severity"],
-                    remediation=r["remediation"],
-                    pqc_mapping=r["pqc_mapping"],
-                    confidence=r.get("confidence", "medium"),
-                    confidence_reason=r.get("confidence_reason", ""),
-                    evidence=ev,
+    for rule in RULES:
+        try:
+            if rule.when(facts):
+                findings.append(
+                    {
+                        "id": rule.id,
+                        "severity": rule.severity.upper(),
+                        "title": rule.title,
+                        "fix": rule.fix,
+                        "pqc_note": rule.pqc_note,
+                        "confidence": rule.confidence,
+                        "confidence_reason": rule.confidence_reason,
+                        "evidence": rule.evidence(facts),
+                    }
                 )
-            )
+        except Exception:
+            # Never let one rule break the scan.
+            continue
 
-    findings.sort(key=lambda x: (_sev_rank(x.get("severity", "low")), x.get("rule_id", "")))
+    findings.sort(key=lambda f: _sev_rank(f.get("severity", "").lower()), reverse=True)
     return findings
 
 
-def derive_risk_and_score(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
+def risk_level_from_findings(findings: List[Dict[str, Any]]) -> Tuple[str, str]:
     """
-    Convert findings -> risk label + quantum score.
+    Returns (risk_label, risk_level) where:
+      risk_label is e.g. "critical (RULE1, RULE2)"
+      risk_level is one of: "critical"|"high"|"medium"|"low"
     """
     if not findings:
-        return {
-            "risk_level": "low",
-            "risk": "low",
-            "quantum_risk_score": 95,
-            "quantum_risk_level": "low",
-        }
+        return ("low", "low")
 
-    # Worst severity drives risk_level
-    worst = min((_sev_rank(f.get("severity", "low")) for f in findings), default=3)
-    risk_level = {0: "critical", 1: "high", 2: "medium", 3: "low"}.get(worst, "low")
-
-    # Score: start at 100 and subtract points for each finding
-    points = sum(_sev_points(f.get("severity", "low")) for f in findings)
-    score = 100 - points
-    if score < 0:
-        score = 0
-    if score > 100:
-        score = 100
-
-    if score >= 80:
-        qlvl = "low"
-    elif score >= 50:
-        qlvl = "medium"
-    else:
-        qlvl = "high"
-
-    return {
-        "risk_level": risk_level,
-        "risk": f"{risk_level} ({', '.join([f.get('rule_id','') for f in findings[:6]])}{'...' if len(findings)>6 else ''})",
-        "quantum_risk_score": score,
-        "quantum_risk_level": qlvl,
-    }
+    top = max((_sev_rank(f["severity"].lower()) for f in findings), default=1)
+    level = {4: "critical", 3: "high", 2: "medium", 1: "low"}.get(top, "low")
+    ids = [f.get("id", "") for f in findings if f.get("id")]
+    label = f"{level} ({', '.join(ids)})" if ids else level
+    return (label, level)
 
 
-def derive_pqc_relevance(facts: Dict[str, Any]) -> Dict[str, Any]:
+def pqc_relevance_and_reco(facts: Dict[str, Any], findings: List[Dict[str, Any]]) -> Tuple[str, str]:
     """
-    Simple PQC relevance labels based on certificate key algorithm class.
+    This is your PQC angle:
+      - RSA/EC endpoints => HIGH PQC relevance
+      - otherwise MEDIUM/LOW
     """
-    kt = (facts.get("key_type") or "").upper()
-    if kt == "RSA":
-        return {"pqc_relevance": "high", "pqc_recommendation": "Prioritize RSA inventory and plan hybrid/PQC migration (Kyber KEM + PQC signatures)."}
-    if kt == "EC":
-        return {"pqc_relevance": "medium", "pqc_recommendation": "ECC is quantum-vulnerable class; inventory ECDH/ECDSA and plan hybrid/PQC migration."}
-    if kt:
-        return {"pqc_relevance": "low", "pqc_recommendation": "Key type not classically targeted by Shor; still keep crypto-agility and TLS posture strong."}
-    return {"pqc_relevance": "unknown", "pqc_recommendation": "Insufficient certificate info; verify endpoint and re-scan."}
+    key_type = (facts.get("key_type") or "").upper()
+
+    if key_type in ("RSA", "EC"):
+        if key_type == "RSA":
+            return (
+                "HIGH",
+                "Endpoint uses RSA. Plan hybrid/PQC migration: Kyber (KEM) + Dilithium/Falcon (signatures) with crypto-agility.",
+            )
+        return (
+            "HIGH",
+            "Endpoint uses ECC (ECDSA/ECDH class). Plan hybrid/PQC migration: Kyber (KEM) + Dilithium/Falcon (signatures) with crypto-agility.",
+        )
+
+    # If we detect legacy TLS / weak ciphers, still PQC-relevant as “hygiene prerequisite”
+    ids = {f.get("id") for f in findings}
+    if "LEGACY_TLS_SUPPORTED" in ids or "NO_TLS13" in ids or "WEAK_CIPHER_ACCEPTED" in ids:
+        return (
+            "MEDIUM",
+            "Crypto-agility prerequisite: harden TLS configs and enable TLS 1.3 before PQC/hybrid rollout.",
+        )
+
+    return ("LOW", "No direct RSA/ECC certificate key detected. Focus on crypto inventory and readiness.")
+
+
+# ----------------- Rules -----------------
+
+def _list(v: Any) -> List[Any]:
+    return v if isinstance(v, list) else []
+
+
+RULES: List[Rule] = [
+    Rule(
+        id="CERT_EXPIRED",
+        title="Certificate expired",
+        severity="high",
+        fix="Renew/rotate certificates immediately. Ensure automated renewal (ACME) if possible.",
+        pqc_note="Operational PKI hygiene matters before PQC transitions.",
+        confidence="high",
+        confidence_reason="Expiry is computed from the presented X.509 certificate.",
+        when=lambda f: (f.get("days_until_expiry") is not None) and (f.get("days_until_expiry") < 0),
+        evidence=lambda f: {
+            "days_until_expiry": f.get("days_until_expiry"),
+            "not_after": f.get("not_after"),
+        },
+    ),
+    Rule(
+        id="CERT_EXPIRING_SOON",
+        title="Certificate expiring soon",
+        severity="medium",
+        fix="Schedule certificate renewal/rotation soon; ensure renewal automation.",
+        pqc_note="Short-lived cert strategies often change during PQC migration.",
+        confidence="high",
+        confidence_reason="Expiry is computed from the presented X.509 certificate.",
+        when=lambda f: (f.get("days_until_expiry") is not None) and (0 <= f.get("days_until_expiry") <= 14),
+        evidence=lambda f: {"days_until_expiry": f.get("days_until_expiry")},
+    ),
+    Rule(
+        id="NO_TLS13",
+        title="TLS 1.3 not supported",
+        severity="high",
+        fix="Enable TLS 1.3 on the termination layer (Nginx/Envoy/ALB/IIS) and upgrade crypto libraries.",
+        pqc_note="Hybrid/PQC TLS is typically built on modern TLS stacks; TLS 1.3 readiness is key.",
+        confidence="high",
+        confidence_reason="Derived from active protocol probes.",
+        when=lambda f: "TLSv1.3" not in _list(f.get("tls_supported_versions")),
+        evidence=lambda f: {"tls_supported_versions": _list(f.get("tls_supported_versions"))},
+    ),
+    Rule(
+        id="LEGACY_TLS_SUPPORTED",
+        title="Legacy TLS versions supported",
+        severity="critical",
+        fix="Disable TLS 1.0/1.1. Require TLS 1.2+ and prefer TLS 1.3.",
+        pqc_note="Baseline hardening should be done before any PQC/hybrid rollout.",
+        confidence="high",
+        confidence_reason="Derived from active protocol probes.",
+        when=lambda f: any(v in ("TLSv1.0", "TLSv1.1") for v in _list(f.get("tls_supported_versions"))),
+        evidence=lambda f: {"tls_supported_versions": _list(f.get("tls_supported_versions"))},
+    ),
+    Rule(
+        id="WEAK_CIPHER_ACCEPTED",
+        title="Weak TLS 1.2 ciphers accepted by server",
+        severity="critical",
+        fix="Remove weak suites (RC4/3DES/NULL/EXPORT/MD5). Keep only ECDHE + AES-GCM/CHACHA20.",
+        pqc_note="Baseline hardening should be done before any PQC/hybrid rollout.",
+        confidence="medium",
+        confidence_reason="Best-effort probe; depends on client OpenSSL cipher support.",
+        when=lambda f: len(_list(f.get("tls12_weak_accepted_ciphers"))) > 0,
+        evidence=lambda f: {"tls12_weak_accepted_ciphers": _list(f.get("tls12_weak_accepted_ciphers"))},
+    ),
+    Rule(
+        id="VERIFY_FAILED",
+        title="Certificate verification failed for default trust store",
+        severity="medium",
+        fix="Fix chain/hostname/trust issues. Ensure intermediates are served and SAN matches host.",
+        pqc_note="Clean PKI reduces migration surprises and operational risk.",
+        confidence="high",
+        confidence_reason="Reported directly by the TLS verification stack.",
+        when=lambda f: bool(f.get("verify_error")),
+        evidence=lambda f: {"verify_error": f.get("verify_error")},
+    ),
+    Rule(
+        id="CHAIN_SHORT_OR_UNAVAILABLE",
+        title="Certificate chain short or unavailable",
+        severity="medium",
+        fix="Ensure the server sends the full chain (include correct intermediates).",
+        pqc_note="Clean PKI reduces migration surprises and operational risk.",
+        confidence="high",
+        confidence_reason="Chain comes from get_verified_chain (client-side verified path).",
+        when=lambda f: (f.get("chain_length") is not None) and (f.get("chain_length") <= 1),
+        evidence=lambda f: {"chain_length": f.get("chain_length"), "chain_source": f.get("chain_source")},
+    ),
+    Rule(
+        id="CHAIN_MISSING_INTERMEDIATE",
+        title="Server likely missing intermediate certificate (incomplete chain)",
+        severity="high",
+        fix="Serve the full certificate chain (leaf + intermediate). Use your CA’s 'fullchain' bundle and configure the TLS terminator to send intermediates.",
+        pqc_note="Chain correctness matters when rotating to PQC/hybrid certificates.",
+        confidence="medium",
+        confidence_reason="Verification failed for default trust store; chain collected via unverified handshake. Validate with openssl s_client for critical endpoints.",
+        when=lambda f: bool(f.get("verify_error")) and (f.get("chain_length") is not None) and (f.get("chain_length") <= 1),
+        evidence=lambda f: {"chain_length": f.get("chain_length"), "chain_source": f.get("chain_source"), "verify_error": f.get("verify_error")},
+    ),
+    Rule(
+        id="PQC_RSA_ENDPOINT",
+        title="RSA certificate key detected (quantum-vulnerable class)",
+        severity="high",
+        fix="Inventory RSA usage and plan migration to PQC/hybrid approaches.",
+        pqc_note="RSA -> Kyber (KEM) + Dilithium/Falcon (signatures) in a crypto-agile design.",
+        confidence="high",
+        confidence_reason="Public key algorithm extracted from the presented X.509 certificate.",
+        when=lambda f: (f.get("key_type") or "").upper() == "RSA",
+        evidence=lambda f: {"key_type": "RSA", "key_size": f.get("key_size")},
+    ),
+    Rule(
+        id="PQC_EC_ENDPOINT",
+        title="Elliptic-curve public key detected (quantum-vulnerable class)",
+        severity="medium",
+        fix="Inventory ECC usage and plan migration to PQC/hybrid approaches.",
+        pqc_note="ECDH/ECDSA -> Kyber (KEM) + Dilithium/Falcon (signatures) in a crypto-agile design.",
+        confidence="high",
+        confidence_reason="Public key algorithm extracted from the presented X.509 certificate.",
+        when=lambda f: (f.get("key_type") or "").upper() == "EC",
+        evidence=lambda f: {"key_type": "EC", "curve": f.get("curve")},
+    ),
+    Rule(
+        id="CERT_HOST_NOT_IN_SAN",
+        title="Hostname not covered by certificate SAN (possible mismatch)",
+        severity="high",
+        fix="Ensure the certificate SAN includes the exact hostname (or correct wildcard) used by clients.",
+        pqc_note="TLS identity correctness is required before any algorithm migration.",
+        confidence="high",
+        confidence_reason="Derived from SAN entries present in the X.509 certificate.",
+        when=lambda f: bool(f.get("host")) and isinstance(f.get("san_dns"), list) and (f.get("host_match") is False),
+        evidence=lambda f: {"host": f.get("host"), "san_dns": _list(f.get("san_dns"))},
+    ),
+    Rule(
+        id="CERT_NO_CRL_DP",
+        title="No CRL distribution points advertised",
+        severity="low",
+        fix="Consider adding CRL distribution points to issued certificates if your PKI relies on CRLs.",
+        pqc_note="Revocation posture matters more as certificate strategies evolve for PQC.",
+        confidence="high",
+        confidence_reason="CRL Distribution Points are read directly from the X.509 certificate extensions.",
+        when=lambda f: len(_list(f.get("crl_urls"))) == 0,
+        evidence=lambda f: {"crl_urls": _list(f.get("crl_urls"))},
+    ),
+    Rule(
+        id="CERT_NO_OCSP_AIA",
+        title="No OCSP responder advertised (AIA)",
+        severity="low",
+        fix="Consider including OCSP AIA in issued certificates, and enable OCSP stapling where appropriate.",
+        pqc_note="Revocation posture matters more as certificate strategies evolve for PQC.",
+        confidence="high",
+        confidence_reason="AIA OCSP URLs are read directly from the X.509 certificate extensions.",
+        when=lambda f: len(_list(f.get("ocsp_urls"))) == 0,
+        evidence=lambda f: {"ocsp_urls": _list(f.get("ocsp_urls"))},
+    ),
+    # Stapling (best-effort; may be unavailable depending on Python/OpenSSL build)
+    Rule(
+        id="OCSP_STAPLING_MISSING",
+        title="OCSP stapling not observed",
+        severity="low",
+        fix="Enable OCSP stapling on the TLS terminator (e.g., nginx: ssl_stapling on; ssl_stapling_verify on;).",
+        pqc_note="Stapling reduces revocation latency; helpful during cert rotations and PQC transition waves.",
+        confidence="low",
+        confidence_reason="Stapling visibility depends on client/TLS stack support; treat as advisory.",
+        when=lambda f: (len(_list(f.get("ocsp_urls"))) > 0) and (f.get("ocsp_stapled") is False),
+        evidence=lambda f: {"ocsp_urls": _list(f.get("ocsp_urls")), "ocsp_stapled": f.get("ocsp_stapled")},
+    ),
+]
