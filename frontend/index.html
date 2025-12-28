@@ -2,364 +2,737 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>PQC Scanner</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>PQC TLS Scanner</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b1220;color:#e9eefc;margin:0}
-    header{padding:18px 22px;border-bottom:1px solid #1d2a44;background:#0d162a;position:sticky;top:0;z-index:10}
-    .wrap{max-width:1100px;margin:0 auto;padding:18px 22px}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}
-    label{font-size:12px;opacity:.85}
-    textarea,input{background:#0f1b33;color:#e9eefc;border:1px solid #243454;border-radius:10px;padding:10px;width:100%}
-    textarea{min-height:84px}
-    button{background:#4c7dff;border:0;color:white;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
-    button.secondary{background:#223459}
-    button:disabled{opacity:.55;cursor:not-allowed}
-    .card{background:#0f1b33;border:1px solid #1f2f50;border-radius:14px;padding:14px}
-    .muted{opacity:.8}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    @media (max-width:900px){.grid{grid-template-columns:1fr}}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:10px 10px;border-bottom:1px solid #1b2946;vertical-align:top}
-    th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;opacity:.8}
-    .pill{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:700}
-    .sev-critical{background:#ff3b3b;color:white}
-    .sev-high{background:#ff7a3b;color:#1a0d00}
-    .sev-medium{background:#ffd23b;color:#201800}
-    .sev-low{background:#41d17a;color:#04110a}
-    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
-    details{background:#0c162c;border:1px solid #1f2f50;border-radius:12px;padding:10px;margin-top:8px}
-    summary{cursor:pointer;font-weight:700}
-    pre{background:#071026;border:1px solid #1f2f50;border-radius:10px;padding:10px;overflow:auto}
-    .progress{height:10px;background:#091026;border:1px solid #1f2f50;border-radius:999px;overflow:hidden}
-    .progress > div{height:100%;background:#4c7dff;width:0%}
-    .tiny{font-size:12px}
+    :root{
+      --bg:#0b1020;
+      --panel:#101a33;
+      --panel2:#0f172a;
+      --text:#e6e9f2;
+      --muted:#a7b0c3;
+      --border:#223055;
+      --accent:#7c3aed;
+      --accent2:#22c55e;
+      --warn:#f59e0b;
+      --bad:#ef4444;
+      --good:#22c55e;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; font-family:var(--sans); background: radial-gradient(1200px 700px at 10% -10%, rgba(124,58,237,.25), transparent),
+      radial-gradient(900px 600px at 90% 0%, rgba(34,197,94,.18), transparent),
+      var(--bg);
+      color:var(--text);
+    }
+    header{
+      padding:22px 22px 10px;
+      max-width:1200px; margin:0 auto;
+      display:flex; align-items:center; justify-content:space-between; gap:16px;
+    }
+    .title{
+      display:flex; flex-direction:column; gap:4px;
+    }
+    h1{margin:0; font-size:20px; letter-spacing:.2px}
+    .subtitle{color:var(--muted); font-size:13px}
+    .pill{
+      padding:6px 10px; border:1px solid var(--border); border-radius:999px; font-size:12px; color:var(--muted);
+      background: rgba(16,26,51,.6);
+    }
+    main{max-width:1200px; margin:0 auto; padding:12px 22px 28px; display:flex; flex-direction:column; gap:14px;}
+    .grid{
+      display:grid; grid-template-columns: 420px 1fr; gap:14px;
+    }
+    @media (max-width: 980px){
+      .grid{grid-template-columns: 1fr;}
+    }
+    .card{
+      background: linear-gradient(180deg, rgba(16,26,51,.9), rgba(16,26,51,.65));
+      border:1px solid var(--border);
+      border-radius:var(--radius);
+      box-shadow: var(--shadow);
+      padding:14px;
+    }
+    .card h2{
+      margin:0 0 10px; font-size:14px; font-weight:650; letter-spacing:.2px;
+      display:flex; align-items:center; justify-content:space-between;
+    }
+    .muted{color:var(--muted)}
+    textarea{
+      width:100%; min-height:180px; resize:vertical;
+      background: rgba(15,23,42,.9);
+      color: var(--text);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.4;
+      outline:none;
+    }
+    input[type="text"]{
+      width:100%;
+      background: rgba(15,23,42,.9);
+      color: var(--text);
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:10px 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      outline:none;
+    }
+    .row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+    .btn{
+      appearance:none; border:1px solid var(--border);
+      background: rgba(124,58,237,.18);
+      color: var(--text);
+      padding:10px 12px;
+      border-radius:12px;
+      font-weight:650;
+      cursor:pointer;
+      transition: transform .06s ease, border-color .15s ease, background .15s ease;
+    }
+    .btn:hover{border-color: rgba(124,58,237,.6); background: rgba(124,58,237,.25);}
+    .btn:active{transform: translateY(1px);}
+    .btn.secondary{background: rgba(34,197,94,.14);}
+    .btn.secondary:hover{border-color: rgba(34,197,94,.6); background: rgba(34,197,94,.22);}
+    .btn.ghost{background: transparent;}
+    .btn:disabled{opacity:.55; cursor:not-allowed}
+    .small{font-size:12px}
+    .kvs{
+      display:grid; grid-template-columns: 140px 1fr;
+      gap:8px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 10px;
+    }
+    .kvs strong{color: var(--text); font-weight:650}
+    .progressWrap{
+      margin-top:10px;
+      border:1px solid var(--border);
+      border-radius:999px;
+      overflow:hidden;
+      height:12px;
+      background: rgba(15,23,42,.9);
+    }
+    .bar{
+      height:100%;
+      width:0%;
+      background: linear-gradient(90deg, rgba(124,58,237,.9), rgba(34,197,94,.85));
+      transition: width .25s ease;
+    }
+    .statusLine{margin-top:8px; font-size:12px; color: var(--muted); display:flex; justify-content:space-between; gap:10px;}
+    table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      overflow:hidden;
+      border-radius: 12px;
+      border:1px solid var(--border);
+    }
+    th, td{
+      padding:10px 10px;
+      border-bottom: 1px solid rgba(34,48,85,.7);
+      vertical-align: top;
+    }
+    th{
+      text-align:left;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing:.3px;
+      background: rgba(15,23,42,.85);
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    tr:hover td{background: rgba(15,23,42,.45);}
+    .risk{
+      display:inline-flex; align-items:center; gap:7px;
+      padding:5px 10px;
+      border-radius:999px;
+      font-weight:700;
+      border:1px solid var(--border);
+      background: rgba(15,23,42,.65);
+      font-size:11px;
+    }
+    .risk.critical{border-color: rgba(239,68,68,.6); color: #fecaca; background: rgba(239,68,68,.12);}
+    .risk.high{border-color: rgba(245,158,11,.65); color: #fde68a; background: rgba(245,158,11,.12);}
+    .risk.medium{border-color: rgba(59,130,246,.65); color: #bfdbfe; background: rgba(59,130,246,.12);}
+    .risk.low{border-color: rgba(34,197,94,.55); color: #bbf7d0; background: rgba(34,197,94,.10);}
+    details{
+      border:1px solid rgba(34,48,85,.75);
+      background: rgba(15,23,42,.6);
+      border-radius: 12px;
+      padding: 10px 12px;
+      margin: 10px 0;
+    }
+    details > summary{
+      cursor:pointer;
+      list-style:none;
+      font-weight:700;
+      font-size:12px;
+      display:flex; align-items:center; justify-content:space-between;
+      gap:10px;
+      user-select:none;
+    }
+    details > summary::-webkit-details-marker{display:none}
+    .chev{
+      width:18px; height:18px; border-radius:6px;
+      display:inline-flex; align-items:center; justify-content:center;
+      border:1px solid rgba(34,48,85,.9);
+      color: var(--muted);
+      background: rgba(16,26,51,.6);
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    details[open] .chev{color: var(--text)}
+    .finding{
+      margin-top:10px;
+      padding:10px;
+      border-radius:12px;
+      border:1px solid rgba(34,48,85,.75);
+      background: rgba(11,16,32,.45);
+    }
+    .finding .topline{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      margin-bottom:6px;
+    }
+    .badge{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      color: var(--muted);
+      background: rgba(16,26,51,.6);
+    }
+    .sev{
+      font-weight:800;
+      letter-spacing:.2px;
+      font-size:11px;
+    }
+    .sev.critical{color:#fecaca}
+    .sev.high{color:#fde68a}
+    .sev.medium{color:#bfdbfe}
+    .sev.low{color:#bbf7d0}
+    .mono{font-family: var(--mono)}
+    pre{
+      margin:8px 0 0;
+      padding:10px;
+      border-radius:12px;
+      border:1px solid rgba(34,48,85,.75);
+      background: rgba(0,0,0,.18);
+      overflow:auto;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.4;
+      color: #dbeafe;
+    }
+    .planItem{
+      padding:10px;
+      border:1px solid rgba(34,48,85,.75);
+      border-radius:12px;
+      background: rgba(11,16,32,.45);
+      margin-top:10px;
+    }
+    .planItem h4{margin:0 0 6px; font-size:12px}
+    .planItem ul{margin:6px 0 0 18px; color: var(--muted); font-size:12px}
+    .rightHeader{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      margin-bottom:10px;
+    }
   </style>
 </head>
-
 <body>
-<header>
-  <div class="wrap">
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
-      <div>
-        <div style="font-size:18px;font-weight:800">PQC Scanner</div>
-        <div class="muted tiny">TLS crypto inventory + PQC relevance + migration guidance</div>
-      </div>
-      <div class="tiny muted" id="apiState"></div>
+  <header>
+    <div class="title">
+      <h1>PQC TLS Scanner</h1>
+      <div class="subtitle">Scan endpoints, see findings with evidence, and generate an ordered TLS migration checklist.</div>
     </div>
-  </div>
-</header>
+    <div class="pill mono">API: <span id="apiBaseLabel"></span></div>
+  </header>
 
-<div class="wrap">
+  <main>
+    <div class="grid">
+      <section class="card">
+        <h2>
+          Scan Targets
+          <span class="muted small">one per line</span>
+        </h2>
 
-  <div class="grid">
-    <div class="card">
-      <div style="font-weight:800;margin-bottom:8px">Run TLS scan</div>
+        <textarea id="targets" spellcheck="false">google.com
+facebook.com
+badssl.com
+incomplete-chain.badssl.com</textarea>
 
-      <div class="row">
-        <div style="flex:2;min-width:240px">
-          <label>Targets (one per line)</label>
-          <textarea id="targets" placeholder="google.com&#10;badssl.com:443&#10;incomplete-chain.badssl.com:443"></textarea>
+        <div class="row" style="margin-top:10px">
+          <button id="startBtn" class="btn">Start scan</button>
+          <button id="loadLastBtn" class="btn ghost">Load last scan</button>
+          <button id="clearBtn" class="btn ghost">Clear</button>
         </div>
 
-        <div style="flex:1;min-width:220px">
-          <label>API Key (optional)</label>
-          <input id="apiKey" placeholder="x-api-key header value"/>
-          <div class="tiny muted" style="margin-top:6px">Leave empty if PQC_API_KEY not set on backend.</div>
+        <div style="margin-top:12px">
+          <div class="muted small">Optional API Key (x-api-key)</div>
+          <input id="apiKey" type="text" placeholder="(empty = no auth)" />
         </div>
 
-        <div style="flex:0 0 auto">
-          <button id="btnScan">Start Scan</button>
+        <div class="progressWrap" title="Progress">
+          <div id="progressBar" class="bar"></div>
         </div>
-      </div>
-
-      <div style="margin-top:12px">
-        <div class="tiny muted" id="scanStatusText">Idle.</div>
-        <div class="progress" style="margin-top:8px">
-          <div id="progressBar"></div>
+        <div class="statusLine">
+          <div id="statusText">Idle</div>
+          <div id="progressText">0%</div>
         </div>
-      </div>
 
-      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
-        <button class="secondary" id="btnLoadLatest">Load latest scan</button>
-        <button class="secondary" id="btnTLSPlan" disabled>Generate TLS Migration Plan</button>
-      </div>
+        <div class="kvs">
+          <div>Scan ID</div><div><strong id="scanId">—</strong></div>
+          <div>Completed</div><div><strong id="doneCounts">—</strong></div>
+          <div>Quantum score</div><div><strong id="quantumScore">—</strong></div>
+        </div>
 
-      <div class="tiny muted" style="margin-top:10px">
-        The scan auto-polls progress until completed, then loads results automatically.
-      </div>
-    </div>
+        <div class="row" style="margin-top:12px">
+          <button id="planBtn" class="btn secondary" disabled>Generate TLS Migration Plan</button>
+        </div>
+        <div id="planBox"></div>
+      </section>
 
-    <div class="card">
-      <div style="font-weight:800;margin-bottom:8px">Recent scans</div>
-      <div class="tiny muted" style="margin-bottom:8px">Click Load to view results.</div>
-      <div style="max-height:260px;overflow:auto">
-        <table id="historyTbl">
-          <thead>
-          <tr>
-            <th style="width:36%">Scan ID</th>
-            <th>Status</th>
-            <th>Created</th>
-            <th>Score</th>
-            <th></th>
-          </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:12px">
-    <div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap">
-      <div>
-        <div style="font-weight:800">Results</div>
-        <div class="tiny muted" id="summaryLine">No results loaded.</div>
-      </div>
-      <div class="tiny muted mono" id="activeScanId"></div>
-    </div>
-
-    <div style="overflow:auto;margin-top:10px">
-      <table id="resultsTbl">
-        <thead>
-        <tr>
-          <th>host</th>
-          <th>port</th>
-          <th>tls</th>
-          <th>key</th>
-          <th>sig</th>
-          <th>expiry</th>
-          <th>risk</th>
-          <th>PQC</th>
-          <th>details</th>
-        </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:12px">
-    <div style="font-weight:800;margin-bottom:8px">TLS Migration Plan</div>
-    <div class="tiny muted">Produces an ordered checklist based on findings across all endpoints.</div>
-    <div id="tlsPlanOut" style="margin-top:10px" class="tiny muted">No plan generated yet.</div>
-  </div>
-
-</div>
-
-<script>
-  const API_BASE = "http://127.0.0.1:8000";
-
-  function hdrs() {
-    const k = document.getElementById("apiKey").value.trim();
-    const h = {"Content-Type":"application/json"};
-    if (k) h["x-api-key"] = k;
-    return h;
-  }
-
-  function sevPill(sev) {
-    const s = (sev||"LOW").toUpperCase();
-    let cls = "sev-low";
-    if (s==="CRITICAL") cls="sev-critical";
-    else if (s==="HIGH") cls="sev-high";
-    else if (s==="MEDIUM") cls="sev-medium";
-    return `<span class="pill ${cls}">${s}</span>`;
-  }
-
-  function setProgress(pct, text) {
-    document.getElementById("progressBar").style.width = `${pct}%`;
-    document.getElementById("scanStatusText").textContent = text;
-  }
-
-  async function apiGet(path) {
-    const res = await fetch(API_BASE + path, {headers: hdrs()});
-    if (!res.ok) throw new Error(await res.text());
-    return await res.json();
-  }
-
-  async function apiPost(path, body) {
-    const res = await fetch(API_BASE + path, {method:"POST", headers: hdrs(), body: JSON.stringify(body)});
-    if (!res.ok) throw new Error(await res.text());
-    return await res.json();
-  }
-
-  function fmtDate(iso) {
-    try { return new Date(iso).toLocaleString(); } catch { return iso; }
-  }
-
-  async function refreshHistory() {
-    try {
-      const list = await apiGet("/scans?limit=20");
-      const tb = document.querySelector("#historyTbl tbody");
-      tb.innerHTML = "";
-      for (const row of list) {
-        const score = row.summary?.quantum_risk_score ?? "";
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td class="mono">${row.id}</td>
-          <td>${row.status}</td>
-          <td class="tiny muted">${fmtDate(row.created_at)}</td>
-          <td>${score}</td>
-          <td><button class="secondary tiny" data-id="${row.id}">Load</button></td>
-        `;
-        tb.appendChild(tr);
-      }
-      tb.querySelectorAll("button[data-id]").forEach(btn=>{
-        btn.addEventListener("click", ()=> loadScan(btn.getAttribute("data-id")));
-      });
-    } catch(e) {
-      // ignore if backend down
-    }
-  }
-
-  function buildFindingsBlock(findings) {
-    if (!findings || findings.length === 0) return `<div class="tiny muted">No findings.</div>`;
-
-    let html = `<details><summary>${findings.length} finding(s)</summary>`;
-    for (const f of findings) {
-      const sev = (f.severity||"LOW").toUpperCase();
-      html += `
-        <div style="margin-top:10px">
-          ${sevPill(sev)} <span style="font-weight:800">${escapeHtml(f.title||f.id)}</span><br/>
-          <span class="mono">${escapeHtml(f.id||"")}</span>
-          <span class="muted"> • Fix:</span> ${escapeHtml(f.fix||"")}
-          <div class="tiny muted" style="margin-top:6px">
-            Confidence: <b>${escapeHtml(f.confidence||"")}</b> — ${escapeHtml(f.confidence_reason||"")}
+      <section class="card">
+        <div class="rightHeader">
+          <h2 style="margin:0">Results</h2>
+          <div class="row">
+            <button id="refreshBtn" class="btn ghost" disabled>Refresh</button>
+            <button id="jsonBtn" class="btn ghost" disabled>View JSON</button>
           </div>
-          <pre class="mono">${escapeHtml(JSON.stringify(f.evidence||{}, null, 2))}</pre>
-          <div class="tiny muted">${escapeHtml(f.pqc_note||"")}</div>
+        </div>
+
+        <div style="overflow:auto; max-height: 70vh;">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:36px;"></th>
+                <th>host</th>
+                <th>port</th>
+                <th>tls</th>
+                <th>key</th>
+                <th>sig</th>
+                <th>expiry</th>
+                <th>risk</th>
+                <th>PQC</th>
+              </tr>
+            </thead>
+            <tbody id="resultsBody">
+              <tr><td colspan="9" class="muted">No results yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="jsonModal" style="display:none; margin-top:12px"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const API_BASE = (localStorage.getItem("PQC_API_BASE") || "http://127.0.0.1:8000").replace(/\/+$/,"");
+    document.getElementById("apiBaseLabel").textContent = API_BASE;
+
+    function headers() {
+      const key = document.getElementById("apiKey").value.trim();
+      const h = {"Content-Type":"application/json"};
+      if (key) h["x-api-key"] = key;
+      return h;
+    }
+
+    function escapeHtml(s){
+      return String(s ?? "")
+        .replaceAll("&","&amp;")
+        .replaceAll("<","&lt;")
+        .replaceAll(">","&gt;")
+        .replaceAll('"',"&quot;")
+        .replaceAll("'","&#039;");
+    }
+
+    function riskBadge(level){
+      const lv = (level||"low").toLowerCase();
+      return `<span class="risk ${lv}">${escapeHtml(lv.toUpperCase())}</span>`;
+    }
+
+    function fmtExpiry(days){
+      if (days === null || days === undefined) return "—";
+      const d = Number(days);
+      if (Number.isNaN(d)) return "—";
+      return `${d}d`;
+    }
+
+    function sevClass(sev){
+      sev = (sev||"low").toLowerCase();
+      return sev;
+    }
+
+    function findingHtml(f){
+      const sev = (f.severity||"low").toLowerCase();
+      const rid = f.rule_id || "";
+      const title = f.title || "";
+      const fix = f.fix || "";
+      const conf = f.confidence || "";
+      const confR = f.confidence_reason || "";
+      const pqc = f.pqc_note || "";
+      const evidence = f.evidence || {};
+
+      return `
+        <div class="finding">
+          <div class="topline">
+            <div>
+              <span class="sev ${sevClass(sev)}">${escapeHtml(sev.toUpperCase())}</span>
+              <span style="margin-left:8px; font-weight:750;">${escapeHtml(title)}</span>
+            </div>
+            <span class="badge">${escapeHtml(rid)}</span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">
+            <strong>Fix:</strong> ${escapeHtml(fix)}
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">
+            <strong>Confidence:</strong> <span class="mono">${escapeHtml(conf)}</span>${confR ? " — " + escapeHtml(confR) : ""}
+          </div>
+          ${pqc ? `<div class="muted" style="font-size:12px; margin-top:6px;"><strong>PQC:</strong> ${escapeHtml(pqc)}</div>` : ""}
+          <pre>${escapeHtml(JSON.stringify(evidence, null, 2))}</pre>
         </div>
       `;
     }
-    html += `</details>`;
-    return html;
-  }
 
-  function escapeHtml(s) {
-    return String(s||"")
-      .replaceAll("&","&amp;")
-      .replaceAll("<","&lt;")
-      .replaceAll(">","&gt;")
-      .replaceAll("\"","&quot;")
-      .replaceAll("'","&#039;");
-  }
+    function chainHtml(r){
+      const chain = r.cert_chain || [];
+      const rows = chain.map(c => `
+        <tr>
+          <td class="mono">${escapeHtml(c.index)}</td>
+          <td>${escapeHtml(c.subject || "")}</td>
+          <td>${escapeHtml(c.issuer || "")}</td>
+          <td class="mono">${escapeHtml(c.not_before || "")}</td>
+          <td class="mono">${escapeHtml(c.not_after || "")}</td>
+          <td class="mono">${escapeHtml((c.key_type||"") + (c.key_detail ? " / " + c.key_detail : ""))}</td>
+          <td class="mono">${escapeHtml(c.sig_algorithm || "")}</td>
+          <td class="mono">${escapeHtml((c.fingerprint_sha256 || c.serial_hex || "").slice(0, 18))}…</td>
+        </tr>
+      `).join("");
 
-  function renderResults(scan) {
-    const tb = document.querySelector("#resultsTbl tbody");
-    tb.innerHTML = "";
+      return `
+        <details>
+          <summary>
+            <span>Certificate chain</span>
+            <span class="chev">›</span>
+          </summary>
+          <div class="kvs" style="margin-top:10px">
+            <div>chain_length</div><div><strong>${escapeHtml(r.chain_length)}</strong></div>
+            <div>chain_issues</div><div><strong>${escapeHtml(r.chain_issues)}</strong></div>
+            <div>chain_source</div><div><strong class="mono">${escapeHtml(r.chain_source)}</strong></div>
+            <div>confidence</div><div><strong class="mono">${escapeHtml(r.chain_confidence || "")}</strong></div>
+            <div>note</div><div>${escapeHtml(r.chain_confidence_reason || "")}</div>
+          </div>
 
-    const sum = scan.summary || {};
-    document.getElementById("summaryLine").textContent =
-      `Quantum score ${sum.quantum_risk_score ?? ""}/100 (${sum.quantum_risk_level ?? ""}), total=${sum.total ?? ""}, critical=${sum.critical ?? 0}, high=${sum.high ?? 0}, medium=${sum.medium ?? 0}, low=${sum.low ?? 0}`;
-
-    document.getElementById("activeScanId").textContent = `active scan: ${scan.id}`;
-
-    for (const r of (scan.results||[])) {
-      const expiry = (r.days_until_expiry==null) ? "" : `${r.days_until_expiry}d`;
-      const risk = (r.risk||"").toLowerCase();
-      const level = (r.risk_level||"low").toLowerCase();
-      const pqc = (r.pqc_relevance||"").toUpperCase();
-
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td class="mono">${escapeHtml(r.host)}</td>
-        <td>${escapeHtml(r.port)}</td>
-        <td>${escapeHtml(r.tls_version)}</td>
-        <td>${escapeHtml(r.key_detail||"")}</td>
-        <td>${escapeHtml(r.sig_algorithm||"")}</td>
-        <td>${escapeHtml(expiry)}</td>
-        <td>${sevPill(level.toUpperCase())}</td>
-        <td>${escapeHtml(pqc)}</td>
-        <td>
-          <div class="tiny muted">${escapeHtml(r.pqc_recommendation||"")}</div>
-          ${buildFindingsBlock(r.findings)}
-        </td>
+          <div style="overflow:auto; margin-top:10px;">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th><th>subject</th><th>issuer</th><th>not_before</th><th>not_after</th><th>key</th><th>sig</th><th>fp/serial</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rows || `<tr><td colspan="8" class="muted">No chain details returned.</td></tr>`}
+              </tbody>
+            </table>
+          </div>
+        </details>
       `;
-      tb.appendChild(tr);
     }
 
-    document.getElementById("btnTLSPlan").disabled = false;
-  }
+    function certExtensionsHtml(r){
+      const san = r.san_dns || [];
+      const ku = r.key_usage || {};
+      const eku = r.eku || [];
+      const ocsp = r.ocsp_urls || [];
+      const crl = r.crl_urls || [];
+      const cai = r.ca_issuers_urls || [];
 
-  async function loadScan(scanId) {
-    const scan = await apiGet(`/scans/${scanId}/results`);
-    renderResults(scan);
-    window.__ACTIVE_SCAN_ID__ = scanId;
-  }
+      return `
+        <details>
+          <summary>
+            <span>Certificate extensions</span>
+            <span class="chev">›</span>
+          </summary>
 
-  async function pollProgress(scanId) {
-    while (true) {
-      const st = await apiGet(`/scans/${scanId}`);
-      const p = st.progress || {total:0, done:0, percent:0};
-      setProgress(p.percent||0, `Scan ${st.status}: ${p.done}/${p.total} (${p.percent}%)`);
+          <div class="kvs" style="margin-top:10px">
+            <div>subject</div><div class="mono"><strong>${escapeHtml(r.subject || "")}</strong></div>
+            <div>issuer</div><div class="mono"><strong>${escapeHtml(r.issuer || "")}</strong></div>
+            <div>SAN (DNS)</div><div class="mono">${escapeHtml(san.join(", ") || "—")}</div>
+            <div>KeyUsage</div><div class="mono">${escapeHtml(Object.keys(ku).filter(k=>ku[k]).join(", ") || "—")}</div>
+            <div>EKU</div><div class="mono">${escapeHtml(eku.join(", ") || "—")}</div>
+            <div>OCSP URLs (AIA)</div><div class="mono">${escapeHtml(ocsp.join(", ") || "—")}</div>
+            <div>CA Issuers (AIA)</div><div class="mono">${escapeHtml(cai.join(", ") || "—")}</div>
+            <div>CRL URLs</div><div class="mono">${escapeHtml(crl.join(", ") || "—")}</div>
+            <div>OCSP stapled</div><div class="mono"><strong>${escapeHtml(String(r.ocsp_stapled))}</strong> <span class="muted">${escapeHtml(r.ocsp_stapling_probe || "")}</span></div>
+          </div>
+        </details>
+      `;
+    }
 
-      if (st.status === "completed") {
-        const scan = await apiGet(`/scans/${scanId}/results`);
-        renderResults(scan);
+    function findingsSectionHtml(r){
+      const list = r.findings || [];
+      const items = list.map(f => findingHtml(f)).join("");
+      return `
+        <details open>
+          <summary>
+            <span>${list.length} finding(s)</span>
+            <span class="chev">›</span>
+          </summary>
+          ${items || `<div class="muted" style="margin-top:10px">No findings.</div>`}
+        </details>
+      `;
+    }
+
+    function detailsHtml(r){
+      return `
+        ${findingsSectionHtml(r)}
+        ${certExtensionsHtml(r)}
+        ${chainHtml(r)}
+      `;
+    }
+
+    function rowHtml(r, idx){
+      const hp = `${r.host || ""}`;
+      const tls = r.tls_version || "—";
+      const key = (r.key_type || "—") + (r.key_detail ? " / " + r.key_detail : "");
+      const sig = r.sig_algorithm || "—";
+      const exp = fmtExpiry(r.days_until_expiry);
+      const risk = riskBadge(r.risk || r.risk_level || "low");
+      const pqc = (r.pqc_relevance || "—");
+
+      const summaryCell = `
+        <div class="muted small">
+          ${r.error ? `<span class="mono">${escapeHtml(r.error)}</span>` : ""}
+          ${r.verify_error ? `<div>verify_error: <span class="mono">${escapeHtml(r.verify_error)}</span></div>` : ""}
+        </div>
+      `;
+
+      return `
+        <tr>
+          <td>
+            <details>
+              <summary><span class="chev">›</span></summary>
+              ${detailsHtml(r)}
+            </details>
+          </td>
+          <td class="mono">${escapeHtml(hp)}</td>
+          <td class="mono">${escapeHtml(r.port)}</td>
+          <td class="mono">${escapeHtml(tls)}</td>
+          <td class="mono">${escapeHtml(key)}</td>
+          <td class="mono">${escapeHtml(sig)}</td>
+          <td class="mono">${escapeHtml(exp)}</td>
+          <td>${risk}</td>
+          <td class="mono">${escapeHtml(pqc)}</td>
+        </tr>
+      `;
+    }
+
+    function setProgress(prog){
+      const bar = document.getElementById("progressBar");
+      const pct = prog?.percent ?? 0;
+      bar.style.width = `${pct}%`;
+      document.getElementById("progressText").textContent = `${pct}%`;
+      const done = prog?.done ?? 0;
+      const total = prog?.total ?? 0;
+      document.getElementById("doneCounts").textContent = `${done}/${total}`;
+    }
+
+    function setStatus(text){
+      document.getElementById("statusText").textContent = text;
+    }
+
+    function setSummary(summary){
+      if (!summary || Object.keys(summary).length === 0){
+        document.getElementById("quantumScore").textContent = "—";
         return;
       }
-      await new Promise(r => setTimeout(r, 600));
+      document.getElementById("quantumScore").textContent = `${summary.quantum_risk_score ?? "—"} (${summary.quantum_risk_level ?? "—"})`;
     }
-  }
 
-  document.getElementById("btnScan").addEventListener("click", async ()=>{
-    try {
-      const raw = document.getElementById("targets").value.trim();
-      const targets = raw.split("\n").map(x=>x.trim()).filter(Boolean);
-      if (!targets.length) return alert("Add at least one target.");
+    let currentScanId = null;
+    let lastResults = null;
 
-      setProgress(0, "Creating scan...");
-      const st = await apiPost("/scans", {targets});
-      window.__ACTIVE_SCAN_ID__ = st.id;
-      await refreshHistory();
-      await pollProgress(st.id);
-    } catch (e) {
-      console.error(e);
-      alert("Failed to create scan. Is the backend running and API key correct?");
-      setProgress(0, "Idle.");
-    }
-  });
-
-  document.getElementById("btnLoadLatest").addEventListener("click", async ()=>{
-    const list = await apiGet("/scans?limit=1");
-    if (!list.length) return alert("No scans yet.");
-    await loadScan(list[0].id);
-  });
-
-  document.getElementById("btnTLSPlan").addEventListener("click", async ()=>{
-    try {
-      const id = window.__ACTIVE_SCAN_ID__;
-      if (!id) return alert("No active scan loaded.");
-      const plan = await apiGet(`/scans/${id}/migration-plan`);
-      const items = plan.items || [];
-      if (!items.length) {
-        document.getElementById("tlsPlanOut").innerHTML = `<div class="tiny muted">(No plan items returned)</div>`;
+    async function startScan(){
+      const lines = document.getElementById("targets").value.split("\n").map(s=>s.trim()).filter(Boolean);
+      if (!lines.length){
+        alert("Add at least one target.");
         return;
       }
-      let html = "";
-      for (const it of items) {
-        html += `
-          <details>
-            <summary>${sevPill(it.severity)} <span style="font-weight:800">${escapeHtml(it.title)}</span> <span class="mono">${escapeHtml(it.rule_id)}</span></summary>
-            <div style="margin-top:10px" class="tiny">
-              <div><b>Fix:</b> ${escapeHtml(it.fix||"")}</div>
-              <div class="muted" style="margin-top:8px">${escapeHtml(it.pqc_note||"")}</div>
-              <div class="muted" style="margin-top:8px"><b>Affected:</b> ${escapeHtml((it.affected||[]).length)} endpoint(s)</div>
-              <pre class="mono">${escapeHtml(JSON.stringify(it.affected||[], null, 2))}</pre>
-            </div>
-          </details>
-        `;
-      }
-      document.getElementById("tlsPlanOut").innerHTML = html;
-    } catch(e) {
-      console.error(e);
-      document.getElementById("tlsPlanOut").innerHTML = `<div class="tiny muted">Failed: ${escapeHtml(String(e))}</div>`;
-    }
-  });
+      setStatus("Starting scan…");
+      document.getElementById("resultsBody").innerHTML = `<tr><td colspan="9" class="muted">Starting…</td></tr>`;
+      document.getElementById("planBox").innerHTML = "";
+      document.getElementById("planBtn").disabled = true;
+      document.getElementById("refreshBtn").disabled = true;
+      document.getElementById("jsonBtn").disabled = true;
 
-  // Initial load
-  refreshHistory();
-  setInterval(refreshHistory, 4000);
-</script>
+      const res = await fetch(`${API_BASE}/scans`, {
+        method:"POST",
+        headers: headers(),
+        body: JSON.stringify({targets: lines})
+      });
+
+      if (!res.ok){
+        const t = await res.text();
+        throw new Error(`Failed to start scan: ${t}`);
+      }
+      const data = await res.json();
+      currentScanId = data.id;
+      localStorage.setItem("PQC_LAST_SCAN_ID", currentScanId);
+      document.getElementById("scanId").textContent = currentScanId;
+      setProgress(data.progress);
+      setStatus(`Running (${data.progress.done}/${data.progress.total})…`);
+
+      document.getElementById("refreshBtn").disabled = false;
+      pollProgress();
+    }
+
+    async function pollProgress(){
+      if (!currentScanId) return;
+      while(true){
+        const st = await fetch(`${API_BASE}/scans/${currentScanId}`, {headers: headers()});
+        if (!st.ok) break;
+        const status = await st.json();
+
+        setProgress(status.progress);
+        setStatus(`${status.status} (${status.progress.done}/${status.progress.total})`);
+
+        if (status.status === "completed" || status.status === "failed"){
+          await loadResults();
+          document.getElementById("planBtn").disabled = false;
+          document.getElementById("jsonBtn").disabled = false;
+          return;
+        }
+        await new Promise(r=>setTimeout(r, 700));
+      }
+    }
+
+    async function loadResults(){
+      if (!currentScanId) return;
+      const res = await fetch(`${API_BASE}/scans/${currentScanId}/results`, {headers: headers()});
+      if (!res.ok){
+        const t = await res.text();
+        throw new Error(`Failed to load results: ${t}`);
+      }
+      const data = await res.json();
+      lastResults = data;
+
+      setProgress(data.progress);
+      setSummary(data.summary);
+
+      const results = data.results || [];
+      if (!results.length){
+        document.getElementById("resultsBody").innerHTML = `<tr><td colspan="9" class="muted">No results returned.</td></tr>`;
+      } else {
+        document.getElementById("resultsBody").innerHTML = results.map((r,i)=>rowHtml(r,i)).join("");
+      }
+      document.getElementById("refreshBtn").disabled = false;
+      document.getElementById("jsonBtn").disabled = false;
+    }
+
+    async function loadLastScan(){
+      const sid = localStorage.getItem("PQC_LAST_SCAN_ID");
+      if (!sid){
+        alert("No previous scan id found.");
+        return;
+      }
+      currentScanId = sid;
+      document.getElementById("scanId").textContent = sid;
+      setStatus("Loading last scan…");
+      await loadResults();
+      document.getElementById("planBtn").disabled = false;
+    }
+
+    async function buildPlan(){
+      if (!currentScanId) return;
+      document.getElementById("planBox").innerHTML = `<div class="muted" style="margin-top:10px">Generating…</div>`;
+      const res = await fetch(`${API_BASE}/scans/${currentScanId}/migration-plan`, {headers: headers()});
+      if (!res.ok){
+        const t = await res.text();
+        document.getElementById("planBox").innerHTML = `<div class="muted" style="margin-top:10px">Error: ${escapeHtml(t)}</div>`;
+        return;
+      }
+      const data = await res.json();
+      const items = data.items || [];
+      if (!items.length){
+        document.getElementById("planBox").innerHTML = `<div class="muted" style="margin-top:10px">No plan items returned.</div>`;
+        return;
+      }
+      document.getElementById("planBox").innerHTML = items.map(it => `
+        <div class="planItem">
+          <h4>${escapeHtml(it.step || "")} <span class="badge" style="margin-left:8px">${escapeHtml(it.rule_id || "")}</span></h4>
+          <div class="muted" style="font-size:12px">${escapeHtml(it.why || "")}</div>
+          <ul>
+            ${(it.affected || []).slice(0, 12).map(a=>`<li class="mono">${escapeHtml(a)}</li>`).join("")}
+            ${(it.affected || []).length > 12 ? `<li class="muted">…and more</li>` : ""}
+          </ul>
+          ${(it.evidence_samples && it.evidence_samples.length) ? `<pre>${escapeHtml(JSON.stringify(it.evidence_samples, null, 2))}</pre>` : ""}
+        </div>
+      `).join("");
+    }
+
+    function viewJson(){
+      if (!lastResults){
+        alert("No results to show.");
+        return;
+      }
+      const box = document.getElementById("jsonModal");
+      if (box.style.display === "none"){
+        box.style.display = "block";
+        box.innerHTML = `<pre>${escapeHtml(JSON.stringify(lastResults, null, 2))}</pre>`;
+      } else {
+        box.style.display = "none";
+        box.innerHTML = "";
+      }
+    }
+
+    document.getElementById("startBtn").addEventListener("click", async () => {
+      try{
+        document.getElementById("startBtn").disabled = true;
+        await startScan();
+      } catch(e){
+        alert(String(e));
+        setStatus("Error");
+      } finally {
+        document.getElementById("startBtn").disabled = false;
+      }
+    });
+    document.getElementById("refreshBtn").addEventListener("click", async () => {
+      try{ await loadResults(); } catch(e){ alert(String(e)); }
+    });
+    document.getElementById("planBtn").addEventListener("click", async () => {
+      await buildPlan();
+    });
+    document.getElementById("loadLastBtn").addEventListener("click", async () => {
+      try{ await loadLastScan(); } catch(e){ alert(String(e)); }
+    });
+    document.getElementById("jsonBtn").addEventListener("click", () => viewJson());
+    document.getElementById("clearBtn").addEventListener("click", () => {
+      document.getElementById("targets").value = "";
+    });
+
+    // Auto-load last scan if present
+    (async function init(){
+      const sid = localStorage.getItem("PQC_LAST_SCAN_ID");
+      if (sid){
+        currentScanId = sid;
+        document.getElementById("scanId").textContent = sid;
+        try{
+          await loadResults();
+          document.getElementById("planBtn").disabled = false;
+        } catch(_){}
+      }
+    })();
+  </script>
 </body>
 </html>

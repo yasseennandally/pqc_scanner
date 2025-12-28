@@ -1,546 +1,539 @@
-# scanner.py
 from __future__ import annotations
 
 import socket
 import ssl
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+import shutil
+import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from cryptography.x509.oid import AuthorityInformationAccessOID
-
+from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.hazmat.primitives.asymmetric import rsa, ec
 
 from policy import evaluate_findings, pqc_relevance_and_reco, risk_level_from_findings
 
 
-DEFAULT_TIMEOUT = 6.0
+DEFAULT_TIMEOUT_SECONDS = 6.0
 
+
+# ---- Target parsing ----
+
+_TARGET_RE = re.compile(r"^\s*(?:(?:https?|tcp)://)?(?P<host>[^/:]+)(?::(?P<port>\d+))?\s*$")
+
+
+def parse_target(target: str) -> Tuple[str, int]:
+    m = _TARGET_RE.match(target or "")
+    if not m:
+        return target.strip(), 443
+    host = (m.group("host") or "").strip()
+    port_s = m.group("port")
+    port = int(port_s) if port_s else 443
+    return host, port
+
+
+# ---- Helpers ----
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _dt_to_iso(dt: Optional[datetime]) -> str:
+def _safe_iso(dt: Optional[datetime]) -> Optional[str]:
     if not dt:
-        return ""
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return dt.isoformat(timespec="seconds")
+    return dt.isoformat()
 
 
-def _parse_target(target: str) -> Tuple[str, int]:
-    t = (target or "").strip()
-    if not t:
-        raise ValueError("Empty target")
-    if "://" in t:
-        # allow https://example.com:443
-        t = t.split("://", 1)[1]
-    if "/" in t:
-        t = t.split("/", 1)[0]
-    if ":" in t:
-        host, port_s = t.rsplit(":", 1)
-        return host.strip(), int(port_s.strip())
-    return t, 443
+def _cert_fingerprint_sha256(cert: x509.Certificate) -> str:
+    return cert.fingerprint(hashes.SHA256()).hex()
 
 
-def _match_hostname(host: str, san_dns: List[str]) -> bool:
+def _pk_info(cert: x509.Certificate) -> Tuple[str, str]:
     """
-    Very small wildcard match:
-      - exact match
-      - wildcard like *.example.com matches a.example.com (one label)
+    Returns (key_type, key_detail)
+    key_type is normalized: RSA / EC / UNKNOWN
+    key_detail is key_size for RSA or curve for EC
     """
-    host = (host or "").lower().strip(".")
-    sans = [(s or "").lower().strip(".") for s in san_dns]
-
-    if host in sans:
-        return True
-
-    for pat in sans:
-        if pat.startswith("*."):
-            suffix = pat[2:]
-            if host.endswith("." + suffix) and host.count(".") == suffix.count(".") + 1:
-                return True
-    return False
+    pk = cert.public_key()
+    if isinstance(pk, rsa.RSAPublicKey):
+        return "RSA", str(pk.key_size)
+    if isinstance(pk, ec.EllipticCurvePublicKey):
+        curve = getattr(pk.curve, "name", "unknown")
+        return "EC", str(curve)
+    return "UNKNOWN", ""
 
 
-def _connect_handshake(
-    host: str,
-    port: int,
-    *,
-    timeout: float,
-    min_v: Optional[ssl.TLSVersion] = None,
-    max_v: Optional[ssl.TLSVersion] = None,
-    ciphers: Optional[str] = None,
-    verify: bool = True,
-) -> Tuple[Optional[ssl.SSLSocket], Optional[str], Optional[str]]:
-    """
-    Returns (ssock, verify_error, error)
-    verify_error is only for verify=True (trust store / hostname checks).
-    """
-    raw = socket.create_connection((host, port), timeout=timeout)
-    raw.settimeout(timeout)
-
-    if verify:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = True
-        ctx.verify_mode = ssl.CERT_REQUIRED
-    else:
-        ctx = ssl._create_unverified_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-    # Tighten versions if provided
-    if min_v is not None:
-        ctx.minimum_version = min_v
-    if max_v is not None:
-        ctx.maximum_version = max_v
-
-    if ciphers:
-        try:
-            ctx.set_ciphers(ciphers)
-        except Exception:
-            # OpenSSL build may not support some cipher strings
-            pass
-
-    verify_error = None
+def _sig_algorithm(cert: x509.Certificate) -> str:
     try:
-        ssock = ctx.wrap_socket(raw, server_hostname=host)
-        ssock.do_handshake()
-        return ssock, verify_error, None
-    except ssl.SSLCertVerificationError as e:
-        verify_error = str(e)
-        # try to still return unverified details elsewhere
+        # cryptography gives an OID object with a name
+        return cert.signature_algorithm_oid._name or cert.signature_algorithm_oid.dotted_string
+    except Exception:
         try:
-            raw.close()
+            return cert.signature_algorithm_oid.dotted_string
         except Exception:
-            pass
-        return None, verify_error, None
-    except Exception as e:
-        try:
-            raw.close()
-        except Exception:
-            pass
-        return None, verify_error, str(e)
+            return ""
 
 
-def _tls_version_label(v: ssl.TLSVersion) -> str:
-    if v == ssl.TLSVersion.TLSv1_3:
-        return "TLSv1.3"
-    if v == ssl.TLSVersion.TLSv1_2:
-        return "TLSv1.2"
-    if v == ssl.TLSVersion.TLSv1_1:
-        return "TLSv1.1"
-    if v == ssl.TLSVersion.TLSv1:
-        return "TLSv1.0"
-    return str(v)
-
-
-def _probe_supported_versions(host: str, port: int, timeout: float) -> Tuple[List[str], Dict[str, bool], List[str]]:
-    versions = [
-        ssl.TLSVersion.TLSv1_3,
-        ssl.TLSVersion.TLSv1_2,
-        ssl.TLSVersion.TLSv1_1,
-        ssl.TLSVersion.TLSv1,
-    ]
-    supported: List[str] = []
-    support_map: Dict[str, bool] = {}
-    errors: List[str] = []
-
-    for v in versions:
-        lab = _tls_version_label(v)
-        ssock, _, err = _connect_handshake(host, port, timeout=timeout, min_v=v, max_v=v, verify=False)
-        if ssock:
-            support_map[lab] = True
-            supported.append(lab)
-            try:
-                ssock.close()
-            except Exception:
-                pass
-        else:
-            support_map[lab] = False
-            if err:
-                errors.append(f"{lab}: {err}")
-
-    return supported, support_map, errors
-
-
-def _probe_tls12_weak_ciphers(host: str, port: int, timeout: float) -> Tuple[List[str], List[str]]:
-    """
-    Best-effort:
-      For each candidate cipher string, force TLS1.2 + that cipher list and see if handshake succeeds.
-    """
-    candidates = [
-        "AES128-SHA",
-        "AES256-SHA",
-        "ECDHE-RSA-AES128-SHA",
-        "ECDHE-RSA-AES256-SHA",
-        "ECDHE-ECDSA-AES128-SHA",
-        "ECDHE-ECDSA-AES256-SHA",
-        "DES-CBC3-SHA",
-        "RC4-SHA",
-    ]
-
-    accepted: List[str] = []
-    errors: List[str] = []
-
-    for c in candidates:
-        ssock, _, err = _connect_handshake(
-            host,
-            port,
-            timeout=timeout,
-            min_v=ssl.TLSVersion.TLSv1_2,
-            max_v=ssl.TLSVersion.TLSv1_2,
-            ciphers=c,
-            verify=False,
-        )
-        if ssock:
-            accepted.append(c)
-            try:
-                ssock.close()
-            except Exception:
-                pass
-        else:
-            if err:
-                errors.append(f"{c}: {err}")
-
-    # "accepted" is what the server allowed to negotiate (at least once)
-    # "errors" is just debugging (not shown unless you want)
-    return accepted, errors
-
-
-def _load_chain_from_socket(ssock: ssl.SSLSocket) -> Tuple[List[x509.Certificate], str]:
-    """
-    Try to load as much chain as possible.
-    Python 3.14 on some builds provides get_verified_chain().
-    Fallback: leaf only.
-    """
-    chain: List[x509.Certificate] = []
-    source = "peer_cert_only"
-
-    # get_verified_chain() is not universal; best-effort
+def _parse_san_dns(cert: x509.Certificate) -> List[str]:
     try:
-        if hasattr(ssock, "get_verified_chain"):
-            ders = ssock.get_verified_chain()
-            if ders:
-                for der in ders:
-                    chain.append(x509.load_der_x509_certificate(der))
-                source = "get_verified_chain"
-                return chain, source
+        ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName)
+        return list(ext.value.get_values_for_type(x509.DNSName))
+    except Exception:
+        return []
+
+
+def _parse_key_usage(cert: x509.Certificate) -> Dict[str, bool]:
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.KeyUsage)
+        ku: x509.KeyUsage = ext.value
+        return {
+            "digital_signature": bool(ku.digital_signature),
+            "content_commitment": bool(ku.content_commitment),
+            "key_encipherment": bool(ku.key_encipherment),
+            "data_encipherment": bool(ku.data_encipherment),
+            "key_agreement": bool(ku.key_agreement),
+            "key_cert_sign": bool(ku.key_cert_sign),
+            "crl_sign": bool(ku.crl_sign),
+            "encipher_only": bool(getattr(ku, "encipher_only", False)),
+            "decipher_only": bool(getattr(ku, "decipher_only", False)),
+        }
+    except Exception:
+        return {}
+
+
+def _parse_eku(cert: x509.Certificate) -> List[str]:
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage)
+        eku: x509.ExtendedKeyUsage = ext.value
+        return [oid.dotted_string for oid in eku]
+    except Exception:
+        return []
+
+
+def _parse_aia(cert: x509.Certificate) -> Tuple[List[str], List[str]]:
+    ocsp_urls: List[str] = []
+    ca_issuers: List[str] = []
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.AuthorityInformationAccess)
+        for ad in ext.value:
+            if ad.access_location and isinstance(ad.access_location, x509.UniformResourceIdentifier):
+                uri = ad.access_location.value
+                if ad.access_method == x509.AuthorityInformationAccessOID.OCSP:
+                    ocsp_urls.append(uri)
+                elif ad.access_method == x509.AuthorityInformationAccessOID.CA_ISSUERS:
+                    ca_issuers.append(uri)
     except Exception:
         pass
+    return ocsp_urls, ca_issuers
 
-    # Fallback leaf
+
+def _parse_crl_dp(cert: x509.Certificate) -> List[str]:
+    urls: List[str] = []
     try:
-        der = ssock.getpeercert(binary_form=True)
-        if der:
-            chain.append(x509.load_der_x509_certificate(der))
-    except Exception:
-        pass
-
-    return chain, source
-
-
-def _cert_chain_table(chain: List[x509.Certificate]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    for i, cert in enumerate(chain):
-        try:
-            pub = cert.public_key()
-            key_s = ""
-            if isinstance(pub, rsa.RSAPublicKey):
-                key_s = f"RSA / {pub.key_size}"
-            elif isinstance(pub, ec.EllipticCurvePublicKey):
-                key_s = f"EC / {pub.curve.name}"
-            else:
-                key_s = pub.__class__.__name__
-
-            fp = cert.fingerprint(hashes.SHA256()).hex()
-            out.append(
-                {
-                    "idx": i,
-                    "subject": cert.subject.rfc4514_string(),
-                    "issuer": cert.issuer.rfc4514_string(),
-                    "not_before": _dt_to_iso(cert.not_valid_before),
-                    "not_after": _dt_to_iso(cert.not_valid_after),
-                    "key": key_s,
-                    "sig": cert.signature_algorithm_oid._name if cert.signature_algorithm_oid else "",
-                    "fp_sha256": fp,
-                }
-            )
-        except Exception:
-            continue
-    return out
-
-
-def _extract_leaf_facts(host: str, leaf: x509.Certificate) -> Dict[str, Any]:
-    facts: Dict[str, Any] = {}
-
-    facts["subject"] = leaf.subject.rfc4514_string()
-    facts["issuer"] = leaf.issuer.rfc4514_string()
-    facts["not_before"] = _dt_to_iso(leaf.not_valid_before)
-    facts["not_after"] = _dt_to_iso(leaf.not_valid_after)
-
-    # Expiry
-    try:
-        days = int((leaf.not_valid_after - _now_utc()).total_seconds() // 86400)
-    except Exception:
-        days = None
-    facts["days_until_expiry"] = days
-
-    # Signature algorithm name
-    try:
-        facts["sig_algorithm"] = leaf.signature_algorithm_oid._name if leaf.signature_algorithm_oid else ""
-    except Exception:
-        facts["sig_algorithm"] = ""
-
-    # Public key
-    try:
-        pub = leaf.public_key()
-        if isinstance(pub, rsa.RSAPublicKey):
-            facts["key_type"] = "RSA"
-            facts["key_size"] = str(pub.key_size)
-            facts["key_detail"] = f"RSA / {pub.key_size}"
-        elif isinstance(pub, ec.EllipticCurvePublicKey):
-            facts["key_type"] = "EC"
-            facts["curve"] = pub.curve.name
-            facts["key_detail"] = f"EC / {pub.curve.name}"
-        else:
-            facts["key_type"] = pub.__class__.__name__
-            facts["key_detail"] = pub.__class__.__name__
-    except Exception:
-        facts["key_type"] = ""
-        facts["key_detail"] = ""
-
-    # SAN DNS
-    san_dns: List[str] = []
-    try:
-        ext = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName)
-        san = ext.value
-        san_dns = list(san.get_values_for_type(x509.DNSName))
-    except Exception:
-        san_dns = []
-    facts["san_dns"] = san_dns
-    facts["host"] = host
-    facts["host_match"] = _match_hostname(host, san_dns) if san_dns else True  # if no SAN, don't over-flag here
-
-    # CRL Distribution Points URLs
-    crl_urls: List[str] = []
-    try:
-        crl_ext = leaf.extensions.get_extension_for_class(x509.CRLDistributionPoints).value
-        for dp in crl_ext:
+        ext = cert.extensions.get_extension_for_class(x509.CRLDistributionPoints)
+        for dp in ext.value:
             if dp.full_name:
                 for name in dp.full_name:
                     if isinstance(name, x509.UniformResourceIdentifier):
-                        crl_urls.append(name.value)
-    except Exception:
-        crl_urls = []
-    facts["crl_urls"] = crl_urls
-
-    # Authority Information Access: OCSP URLs (+ caIssuers if you want later)
-    ocsp_urls: List[str] = []
-    try:
-        aia = leaf.extensions.get_extension_for_class(x509.AuthorityInformationAccess).value
-        for ad in aia:
-            # ✅ FIX: compare using cryptography.x509.oid.AuthorityInformationAccessOID.OCSP
-            if ad.access_method == AuthorityInformationAccessOID.OCSP:
-                if isinstance(ad.access_location, x509.UniformResourceIdentifier):
-                    ocsp_urls.append(ad.access_location.value)
-    except Exception:
-        ocsp_urls = []
-    facts["ocsp_urls"] = ocsp_urls
-
-    return facts
-
-
-def scan_host(host: str, port: int, timeout: float = DEFAULT_TIMEOUT) -> Dict[str, Any]:
-    """
-    One target scan: TLS facts -> findings -> risk + PQC recommendations.
-    """
-    result: Dict[str, Any] = {
-        "host": host,
-        "port": port,
-        "error": "",
-        "verify_error": "",
-        "tls_version": "",
-        "cipher_name": "",
-        "cipher_bits": None,
-        "alpn": "",
-        "tls_supported_versions": [],
-        "tls_support_map": {},
-        "tls_probe_errors": [],
-        "tls12_weak_accepted_ciphers": [],
-        "tls12_accepted_ciphers": [],
-        "key_type": "",
-        "key_detail": "",
-        "sig_algorithm": "",
-        "subject": "",
-        "issuer": "",
-        "not_before": "",
-        "not_after": "",
-        "days_until_expiry": None,
-        "san_dns": [],
-        "host_match": True,
-        "crl_urls": [],
-        "ocsp_urls": [],
-        "ocsp_stapled": False,
-        "ocsp_stapled_sha256": "",
-        "cert_chain": [],
-        "chain_length": 0,
-        "chain_source": "",
-        "chain_issues": [],
-        "findings": [],
-        "risk": "low",
-        "risk_level": "low",
-        "pqc_relevance": "LOW",
-        "pqc_recommendation": "",
-    }
-
-    # 1) Supported versions probe
-    supported_versions, support_map, probe_errors = _probe_supported_versions(host, port, timeout)
-    result["tls_supported_versions"] = supported_versions
-    result["tls_support_map"] = support_map
-    result["tls_probe_errors"] = probe_errors
-
-    # 2) Verified handshake (for verify_error visibility)
-    ssock_v, verify_error, err_v = _connect_handshake(host, port, timeout=timeout, verify=True)
-    if verify_error:
-        result["verify_error"] = verify_error
-    if err_v:
-        # network errors etc
-        result["error"] = err_v
-
-    # 3) Unverified handshake to extract cert details even if verify failed
-    ssock, _, err = _connect_handshake(host, port, timeout=timeout, verify=False)
-    if not ssock:
-        if err and not result["error"]:
-            result["error"] = err
-        # still produce findings from whatever we have
-        facts = dict(result)
-        findings = evaluate_findings(facts)
-        result["findings"] = findings
-        risk_label, risk_level = risk_level_from_findings(findings)
-        result["risk"] = risk_label
-        result["risk_level"] = risk_level
-        pqc_rel, pqc_rec = pqc_relevance_and_reco(facts, findings)
-        result["pqc_relevance"] = pqc_rel
-        result["pqc_recommendation"] = pqc_rec
-        return result
-
-    # negotiated
-    try:
-        result["tls_version"] = ssock.version() or ""
-    except Exception:
-        result["tls_version"] = ""
-    try:
-        c = ssock.cipher()
-        if c:
-            result["cipher_name"] = c[0]
-            result["cipher_bits"] = c[2]
+                        urls.append(name.value)
     except Exception:
         pass
-    try:
-        a = ssock.selected_alpn_protocol()
-        result["alpn"] = a or ""
-    except Exception:
-        pass
-
-    # Forward secrecy heuristic (fix TLS1.3 correctness)
-    cipher_name = (result.get("cipher_name") or "").upper()
-    if (result.get("tls_version") or "").startswith("TLSv1.3"):
-        result["forward_secrecy_possible"] = True
-    else:
-        result["forward_secrecy_possible"] = ("ECDHE" in cipher_name) or ("DHE" in cipher_name)
-
-    # OCSP stapling best-effort (may be unavailable depending on Python/OpenSSL build)
-    try:
-        resp = getattr(ssock, "ocsp_response", None)
-        if isinstance(resp, (bytes, bytearray)) and len(resp) > 0:
-            result["ocsp_stapled"] = True
-            h = hashes.Hash(hashes.SHA256())
-            h.update(bytes(resp))  # ✅ FIX: actually hash the response bytes
-            result["ocsp_stapled_sha256"] = h.finalize().hex()
-        else:
-            result["ocsp_stapled"] = False
-    except Exception:
-        result["ocsp_stapled"] = False
-
-    # Certificate chain
-    chain, chain_source = _load_chain_from_socket(ssock)
-    result["chain_source"] = chain_source
-    result["chain_length"] = len(chain)
-    result["cert_chain"] = _cert_chain_table(chain)
-
-    # Leaf extraction
-    if chain:
-        leaf = chain[0]
-        leaf_facts = _extract_leaf_facts(host, leaf)
-        # merge into result
-        for k, v in leaf_facts.items():
-            result[k] = v
-
-    # TLS 1.2 weak ciphers probe (best-effort)
-    weak_accepted, _errs = _probe_tls12_weak_ciphers(host, port, timeout)
-    result["tls12_weak_accepted_ciphers"] = weak_accepted
-    # (We can also keep a general list if you want; for now it’s same)
-    result["tls12_accepted_ciphers"] = weak_accepted
-
-    try:
-        ssock.close()
-    except Exception:
-        pass
-    try:
-        if ssock_v:
-            ssock_v.close()
-    except Exception:
-        pass
-
-    # 4) Findings + risk + PQC recommendation
-    facts = dict(result)
-    findings = evaluate_findings(facts)
-    result["findings"] = findings
-
-    risk_label, risk_level = risk_level_from_findings(findings)
-    result["risk"] = risk_label
-    result["risk_level"] = risk_level
-
-    pqc_rel, pqc_rec = pqc_relevance_and_reco(facts, findings)
-    result["pqc_relevance"] = pqc_rel
-    result["pqc_recommendation"] = pqc_rec
-
-    return result
+    return urls
 
 
-def run_scan(targets: List[str], max_workers: int = 12) -> List[Dict[str, Any]]:
+def _days_until(dt: Optional[datetime]) -> Optional[int]:
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int((dt - _now_utc()).total_seconds() // 86400)
+
+
+def _openssl_ocsp_stapling(host: str, port: int, timeout: float = 8.0) -> Tuple[Optional[bool], str]:
     """
-    Parallel scan for CLI + API usage.
+    Best-effort OCSP stapling detection using openssl s_client -status.
+    Returns (stapled?, debug_text).
+    stapled? can be True/False/None (None = couldn't probe).
     """
-    parsed: List[Tuple[str, int]] = []
-    for t in targets:
+    openssl = shutil.which("openssl")
+    if not openssl:
+        return None, "openssl not in PATH"
+
+    cmd = [openssl, "s_client", "-connect", f"{host}:{port}", "-servername", host, "-status"]
+    try:
+        p = subprocess.run(
+            cmd,
+            input=b"",
+            capture_output=True,
+            timeout=timeout,
+        )
+        out = (p.stdout or b"") + b"\n" + (p.stderr or b"")
+        text = out.decode("utf-8", errors="replace")
+
+        # Common outputs:
+        # "OCSP response: no OCSP response received"
+        # "OCSP Response Status: successful"
+        # or OCSP block present
+        if re.search(r"OCSP response:\s+no OCSP response received", text, re.IGNORECASE):
+            return False, "openssl: no OCSP response received"
+        if re.search(r"OCSP Response Status:\s+successful", text, re.IGNORECASE):
+            return True, "openssl: OCSP Response Status successful"
+        if re.search(r"OCSP Response Status:", text, re.IGNORECASE):
+            # status exists but not successful
+            return True, "openssl: OCSP Response Status present"
+        # Some openssl versions say "no response sent"
+        if re.search(r"no response sent", text, re.IGNORECASE):
+            return False, "openssl: no response sent"
+        return None, "openssl: OCSP status unclear"
+    except Exception as e:
+        return None, f"openssl probe error: {e}"
+
+
+def _make_context(verify: bool) -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = verify
+    ctx.verify_mode = ssl.CERT_REQUIRED if verify else ssl.CERT_NONE
+    # be permissive about ALPN
+    try:
+        ctx.set_alpn_protocols(["h2", "http/1.1"])
+    except Exception:
+        pass
+    return ctx
+
+
+def _handshake(host: str, port: int, ctx: ssl.SSLContext, timeout: float) -> Tuple[ssl.SSLSocket, str]:
+    sock = socket.create_connection((host, port), timeout=timeout)
+    try:
+        ssock = ctx.wrap_socket(sock, server_hostname=host)
+        # trigger handshake
+        ssock.do_handshake()
+        return ssock, ""
+    except Exception as e:
         try:
-            parsed.append(_parse_target(t))
+            sock.close()
+        except Exception:
+            pass
+        return None, str(e)
+
+
+def _probe_supported_versions(host: str, port: int, timeout: float) -> List[str]:
+    """
+    Active probes for TLS versions (best-effort).
+    """
+    versions = []
+    candidates = []
+    # Python may not have TLSv1.0/1.1 depending on OpenSSL build
+    if hasattr(ssl, "TLSVersion"):
+        candidates = [
+            ("TLSv1", getattr(ssl.TLSVersion, "TLSv1", None)),
+            ("TLSv1.1", getattr(ssl.TLSVersion, "TLSv1_1", None)),
+            ("TLSv1.2", getattr(ssl.TLSVersion, "TLSv1_2", None)),
+            ("TLSv1.3", getattr(ssl.TLSVersion, "TLSv1_3", None)),
+        ]
+    # Filter None
+    candidates = [(name, v) for name, v in candidates if v is not None]
+    for name, v in candidates:
+        try:
+            ctx = _make_context(verify=False)
+            ctx.minimum_version = v
+            ctx.maximum_version = v
+            s, err = _handshake(host, port, ctx, timeout)
+            if s:
+                versions.append(name)
+                try:
+                    s.close()
+                except Exception:
+                    pass
+        except Exception:
+            continue
+    # If none, leave empty (unknown)
+    return versions
+
+
+_WEAK_TLS12_CIPHERS = [
+    "AES128-SHA",
+    "AES256-SHA",
+    "DES-CBC3-SHA",
+    "RC4-SHA",
+    "RC4-MD5",
+    "NULL-MD5",
+    "NULL-SHA",
+    "EXP-RC4-MD5",
+    "EXP-DES-CBC-SHA",
+    # also consider CBC ECDHE variants as weaker than GCM/CHACHA
+    "ECDHE-RSA-AES128-SHA",
+    "ECDHE-RSA-AES256-SHA",
+    "ECDHE-ECDSA-AES128-SHA",
+    "ECDHE-ECDSA-AES256-SHA",
+]
+
+
+def _probe_tls12_accepted_ciphers(host: str, port: int, timeout: float) -> Tuple[List[str], List[str]]:
+    """
+    Best-effort probe: try TLS1.2 with each cipher and record which succeed.
+    Note: depends on client OpenSSL cipher availability.
+    """
+    accepted = []
+    weak_accepted = []
+
+    if not hasattr(ssl, "TLSVersion"):
+        return accepted, weak_accepted
+
+    for cipher in _WEAK_TLS12_CIPHERS:
+        try:
+            ctx = _make_context(verify=False)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+            ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+            try:
+                ctx.set_ciphers(cipher)
+            except Exception:
+                # cipher not supported by client
+                continue
+            s, err = _handshake(host, port, ctx, timeout)
+            if s:
+                accepted.append(cipher)
+                weak_accepted.append(cipher)
+                try:
+                    s.close()
+                except Exception:
+                    pass
         except Exception:
             continue
 
-    results: List[Dict[str, Any]] = []
-    if not parsed:
-        return results
+    return accepted, weak_accepted
 
-    workers = max(1, min(max_workers, len(parsed)))
 
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(scan_host, host, port, DEFAULT_TIMEOUT): (host, port) for host, port in parsed}
-        for fut in as_completed(futs):
+def _forward_secrecy_possible(tls_version: str, cipher_name: str) -> bool:
+    if tls_version == "TLSv1.3":
+        return True
+    c = (cipher_name or "").upper()
+    return ("ECDHE" in c) or ("DHE" in c)
+
+
+def _cert_chain_from_socket(ssock: ssl.SSLSocket, leaf_cert: x509.Certificate) -> Tuple[List[Dict[str, Any]], int, str, str]:
+    """
+    Return (cert_chain_list, chain_length, chain_issues, chain_source)
+    """
+    chain: List[x509.Certificate] = []
+    source = "get_verified_chain"
+    confidence_reason = "Chain comes from get_verified_chain (client-side verified path)."
+
+    # Python may not provide chain APIs; use leaf as fallback.
+    try:
+        # Python 3.11+ has getpeercert(binary_form=True) for leaf
+        if hasattr(ssock, "get_verified_chain"):
+            raw_chain = ssock.get_verified_chain()
+            for item in raw_chain or []:
+                der = None
+                if isinstance(item, (bytes, bytearray)):
+                    der = bytes(item)
+                elif hasattr(item, "public_bytes"):
+                    der = item.public_bytes(Encoding.DER)  # type: ignore
+                elif hasattr(item, "to_cryptography"):
+                    c = item.to_cryptography()
+                    der = c.public_bytes(Encoding.DER)
+                if der:
+                    chain.append(x509.load_der_x509_certificate(der))
+        elif hasattr(ssock, "get_peer_cert_chain"):
+            raw_chain = ssock.get_peer_cert_chain()
+            for der in raw_chain or []:
+                if isinstance(der, (bytes, bytearray)):
+                    chain.append(x509.load_der_x509_certificate(bytes(der)))
+        # Some environments return empty chain; ensure leaf present
+        if not chain:
+            chain = [leaf_cert]
+    except Exception:
+        chain = [leaf_cert]
+        source = "leaf_only"
+        confidence_reason = "Only leaf certificate available via handshake."
+
+    chain_entries: List[Dict[str, Any]] = []
+    for i, cert in enumerate(chain):
+        kt, kd = _pk_info(cert)
+        chain_entries.append({
+            "index": i,
+            "subject": cert.subject.rfc4514_string(),
+            "issuer": cert.issuer.rfc4514_string(),
+            "not_before": _safe_iso(_to_utc(cert.not_valid_before)),
+            "not_after": _safe_iso(_to_utc(cert.not_valid_after)),
+            "key_type": kt,
+            "key_detail": kd,
+            "sig_algorithm": _sig_algorithm(cert),
+            "fingerprint_sha256": _cert_fingerprint_sha256(cert),
+            "serial_hex": hex(cert.serial_number),
+        })
+
+    chain_length = len(chain_entries)
+    issues = "none"
+    if chain_length <= 1:
+        issues = "chain_short_or_unavailable"
+
+    return chain_entries, chain_length, issues, source, confidence_reason
+
+
+def _to_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def scan_host(host: str, port: int = 443, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Dict[str, Any]:
+    start = time.time()
+    out: Dict[str, Any] = {
+        "host": host,
+        "port": int(port),
+        "error": "",
+        "verify_mode": "CERT_REQUIRED",
+        "verify_error": "",
+        "tls_version": "",
+        "tls_supported_versions": [],
+        "cipher_name": "",
+        "cipher_bits": 0,
+        "alpn": None,
+        "subject": "",
+        "issuer": "",
+        "not_before": None,
+        "not_after": None,
+        "days_until_expiry": None,
+        "key_type": "UNKNOWN",
+        "key_detail": "",
+        "sig_algorithm": "",
+        # extensions / revocation pointers
+        "san_dns": [],
+        "key_usage": {},
+        "eku": [],
+        "ocsp_urls": [],
+        "ca_issuers_urls": [],
+        "crl_urls": [],
+        # stapling (best-effort)
+        "ocsp_stapled": None,
+        "ocsp_stapling_probe": "",
+        # chain
+        "cert_chain": [],
+        "chain_length": 0,
+        "chain_issues": "none",
+        "chain_source": "get_verified_chain",
+        "chain_confidence_reason": "",
+        "chain_confidence": "",
+        # tls12 cipher probes
+        "tls12_accepted_ciphers": [],
+        "tls12_weak_accepted_ciphers": [],
+        # fs
+        "forward_secrecy_possible": None,
+        # computed
+        "findings": [],
+        "risk_level": "low",
+        "risk": "low",
+        "pqc_relevance": "MEDIUM",
+        "pqc_recommendation": "",
+        "scan_ms": 0,
+    }
+
+    # 1) try verified handshake first
+    cert_der = None
+    ssock = None
+    try:
+        ctx_v = _make_context(verify=True)
+        ssock, verr = _handshake(host, port, ctx_v, timeout)
+        if not ssock:
+            out["verify_error"] = verr
+            out["verify_mode"] = "CERT_REQUIRED"
+            # fallback unverified
+            ctx_u = _make_context(verify=False)
+            ssock, err2 = _handshake(host, port, ctx_u, timeout)
+            out["verify_mode"] = "CERT_NONE"
+            if not ssock:
+                out["error"] = verr or err2 or "TLS handshake failed"
+                out["scan_ms"] = int((time.time() - start) * 1000)
+                out["findings"] = evaluate_findings(out)
+                out["risk_level"] = risk_level_from_findings(out["findings"])
+                out["risk"] = out["risk_level"]
+                out["pqc_relevance"], out["pqc_recommendation"] = pqc_relevance_and_reco(out)
+                return out
+        # read connection info
+        out["tls_version"] = ssock.version() or ""
+        cipher = ssock.cipher() or ("", "", 0)
+        out["cipher_name"] = cipher[0] or ""
+        out["cipher_bits"] = int(cipher[2] or 0)
+        try:
+            out["alpn"] = ssock.selected_alpn_protocol()
+        except Exception:
+            out["alpn"] = None
+
+        cert_der = ssock.getpeercert(binary_form=True)
+        if not cert_der:
+            out["error"] = "No certificate presented"
             try:
-                results.append(fut.result())
-            except Exception as e:
-                host, port = futs[fut]
-                results.append({"host": host, "port": port, "error": str(e), "findings": []})
+                ssock.close()
+            except Exception:
+                pass
+            out["findings"] = evaluate_findings(out)
+            out["risk_level"] = risk_level_from_findings(out["findings"])
+            out["risk"] = out["risk_level"]
+            out["pqc_relevance"], out["pqc_recommendation"] = pqc_relevance_and_reco(out)
+            out["scan_ms"] = int((time.time() - start) * 1000)
+            return out
 
-    # stable ordering
-    results.sort(key=lambda r: (r.get("host") or "", int(r.get("port") or 0)))
-    return results
+        cert = x509.load_der_x509_certificate(cert_der)
 
+        out["subject"] = cert.subject.rfc4514_string()
+        out["issuer"] = cert.issuer.rfc4514_string()
+        out["not_before"] = _safe_iso(_to_utc(cert.not_valid_before))
+        out["not_after"] = _safe_iso(_to_utc(cert.not_valid_after))
+        out["days_until_expiry"] = _days_until(_to_utc(cert.not_valid_after))
+        kt, kd = _pk_info(cert)
+        out["key_type"] = kt
+        out["key_detail"] = kd
+        out["sig_algorithm"] = _sig_algorithm(cert)
 
+        out["san_dns"] = _parse_san_dns(cert)
+        out["key_usage"] = _parse_key_usage(cert)
+        out["eku"] = _parse_eku(cert)
+        ocsp_urls, ca_issuers = _parse_aia(cert)
+        out["ocsp_urls"] = ocsp_urls
+        out["ca_issuers_urls"] = ca_issuers
+        out["crl_urls"] = _parse_crl_dp(cert)
+
+        # chain
+        chain_entries, chain_len, chain_issues, chain_source, chain_conf_reason = _cert_chain_from_socket(ssock, cert)
+        out["cert_chain"] = chain_entries
+        out["chain_length"] = chain_len
+        out["chain_issues"] = chain_issues
+        out["chain_source"] = chain_source
+        out["chain_confidence_reason"] = chain_conf_reason
+        out["chain_confidence"] = "high" if chain_source == "get_verified_chain" else "medium"
+
+        # probes
+        out["tls_supported_versions"] = _probe_supported_versions(host, port, timeout=timeout)
+        accepted, weak_accepted = _probe_tls12_accepted_ciphers(host, port, timeout=timeout)
+        out["tls12_accepted_ciphers"] = accepted
+        out["tls12_weak_accepted_ciphers"] = weak_accepted
+
+        out["forward_secrecy_possible"] = _forward_secrecy_possible(out["tls_version"], out["cipher_name"])
+
+        # OCSP stapling best-effort using openssl (optional but valuable)
+        stapled, probe_text = _openssl_ocsp_stapling(host, port, timeout=max(6.0, timeout))
+        out["ocsp_stapled"] = stapled if stapled is not None else False  # keep boolean for UI simplicity
+        out["ocsp_stapling_probe"] = probe_text
+
+        try:
+            ssock.close()
+        except Exception:
+            pass
+
+    except Exception as e:
+        out["error"] = str(e)
+
+    # compute findings + risk + pqc
+    out["findings"] = evaluate_findings(out)
+    out["risk_level"] = risk_level_from_findings(out["findings"])
+    out["risk"] = out["risk_level"]
+    out["pqc_relevance"], out["pqc_recommendation"] = pqc_relevance_and_reco(out)
+    out["scan_ms"] = int((time.time() - start) * 1000)
+    return out
