@@ -1,5 +1,5 @@
-cryptography
-fastapi
-uvicorn[standard]
-pydantic
-requests
+fastapi>=0.110
+uvicorn[standard]>=0.27
+cryptography>=41
+pydantic>=2
+
