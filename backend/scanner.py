@@ -4,12 +4,17 @@ from __future__ import annotations
 import socket
 import ssl
 import hashlib
+import time
+import urllib.parse
+import urllib.request
+import urllib.error
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.x509.oid import AuthorityInformationAccessOID
+from cryptography.x509 import ocsp as x509_ocsp
 
 from policy import evaluate_tls_findings, derive_risk_and_score, derive_pqc_relevance
 
@@ -32,6 +37,29 @@ TLS12_CIPHER_PROBES = [
 ]
 
 _SSLCertVerificationError = getattr(ssl, "SSLCertVerificationError", ssl.SSLError)
+
+def _classify_verify_error(err: Exception) -> Dict[str, Any]:
+    # Best-effort classification of TLS certificate verification failures.
+    # SSLCertVerificationError often exposes verify_code/verify_message.
+    code = getattr(err, "verify_code", None)
+    msg = getattr(err, "verify_message", None) or str(err)
+    msg_l = (msg or "").lower()
+
+    reason = "other"
+    if "hostname" in msg_l or "does not match" in msg_l or "wrong host" in msg_l:
+        reason = "hostname_mismatch"
+    elif "certificate has expired" in msg_l or "expired" in msg_l:
+        reason = "expired"
+    elif "revoked" in msg_l:
+        reason = "revoked"
+    elif "unable to get local issuer" in msg_l or "self signed" in msg_l or "unknown ca" in msg_l:
+        reason = "untrusted_issuer"
+    elif "unable to get issuer certificate" in msg_l or "unable to verify the first certificate" in msg_l:
+        reason = "missing_intermediate"
+    elif "certificate chain too long" in msg_l:
+        reason = "chain_too_long"
+
+    return {"verify_code": code, "verify_message": msg, "verify_reason": reason}
 
 
 def parse_target(target: str) -> Tuple[str, int]:
@@ -127,6 +155,10 @@ def _connect_handshake(
         "cipher_bits": None,
         "alpn": "",
         "verify_error": "",
+        "verify_code": None,
+        "verify_message": "",
+        "verify_reason": "",
+        "unverified_fallback": False,
     }
 
     ctx = _make_context_for_protocol(protocol_const, verify=verify, alpn=alpn)
@@ -355,6 +387,112 @@ def _extract_leaf_extensions(cert: x509.Certificate) -> Dict[str, Any]:
     return out
 
 
+def _probe_http_endpoint(url: str, timeout: float = 3.0, max_read: int = 4096) -> Dict[str, Any]:
+    """Best-effort reachability probe for OCSP/CRL endpoints (NOT a full OCSP request).
+
+    Notes:
+      - Many OCSP responders expect POST requests; this probe only checks basic HTTP reachability.
+      - Any HTTP response code (including 4xx/5xx) still proves the endpoint is reachable at the network level.
+    """
+    start = time.time()
+    out: Dict[str, Any] = {
+        "url": url,
+        "reachable": False,
+        "status_code": None,
+        "elapsed_ms": None,
+        "method": "",
+        "error": "",
+    }
+
+    def _mark_reachable(method: str, status: Optional[int] = None):
+        out["reachable"] = True
+        out["method"] = method
+        out["status_code"] = status
+
+    try:
+        # HEAD first (fast). Some responders reject HEAD (405), which still proves reachability.
+        req = urllib.request.Request(url, method="HEAD")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                _mark_reachable("HEAD", getattr(resp, "status", None) or resp.getcode())
+        except urllib.error.HTTPError as e:
+            _mark_reachable("HEAD", getattr(e, "code", None))
+    except Exception as head_err:
+        try:
+            # Fallback GET with Range to limit bytes.
+            req = urllib.request.Request(url, method="GET", headers={"Range": f"bytes=0-{max_read-1}"})
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    _mark_reachable("GET", getattr(resp, "status", None) or resp.getcode())
+                    _ = resp.read(max_read)
+            except urllib.error.HTTPError as e:
+                _mark_reachable("GET", getattr(e, "code", None))
+        except Exception as get_err:
+            out["error"] = str(get_err or head_err)
+    finally:
+        out["elapsed_ms"] = int((time.time() - start) * 1000)
+
+    return out
+
+
+
+def _probe_revocation_endpoints(ocsp_urls: List[str], crl_urls: List[str], max_urls: int = 2) -> Dict[str, Any]:
+    """Probe advertised OCSP/CRL URLs for basic network/HTTP reachability."""
+    ocsp_results: List[Dict[str, Any]] = []
+    crl_results: List[Dict[str, Any]] = []
+
+    for u in [x for x in (ocsp_urls or []) if str(x).strip()][:max_urls]:
+        try:
+            ocsp_results.append(_probe_http_endpoint(str(u)))
+        except Exception as e:
+            ocsp_results.append({"url": str(u), "reachable": False, "status_code": None, "elapsed_ms": None, "method": "", "error": str(e)})
+
+    for u in [x for x in (crl_urls or []) if str(x).strip()][:max_urls]:
+        try:
+            crl_results.append(_probe_http_endpoint(str(u)))
+        except Exception as e:
+            crl_results.append({"url": str(u), "reachable": False, "status_code": None, "elapsed_ms": None, "method": "", "error": str(e)})
+
+    return {"ocsp_reachability": ocsp_results, "crl_reachability": crl_results}
+
+
+def _parse_stapled_ocsp(der_bytes: bytes) -> Dict[str, Any]:
+    """Parse a stapled OCSP response (if present) into status + timestamps."""
+    out: Dict[str, Any] = {
+        "ocsp_stapled_status": "",
+        "ocsp_stapled_this_update": "",
+        "ocsp_stapled_next_update": "",
+        "ocsp_stapled_produced_at": "",
+        "ocsp_stapled_is_stale": False,
+        "ocsp_stapled_stale_by_days": None,
+    }
+    try:
+        resp = x509_ocsp.load_der_ocsp_response(der_bytes)
+        # Cryptography uses OCSPResponseStatus + OCSPCertStatus enums
+        out["ocsp_stapled_produced_at"] = _utc_iso(getattr(resp, "produced_at", None))
+        if getattr(resp, "response_status", None) is not None:
+            out["ocsp_response_status"] = str(resp.response_status).split(".")[-1]
+        # Only successful responses have single_response
+        single = getattr(resp, "responses", None)
+        if single:
+            r0 = single[0]
+            out["ocsp_stapled_status"] = str(getattr(r0, "cert_status", "")).split(".")[-1].lower()
+            out["ocsp_stapled_this_update"] = _utc_iso(getattr(r0, "this_update", None))
+            out["ocsp_stapled_next_update"] = _utc_iso(getattr(r0, "next_update", None))
+            try:
+                nu = getattr(r0, "next_update", None)
+                if nu is not None:
+                    if nu.tzinfo is None:
+                        nu = nu.replace(tzinfo=timezone.utc)
+                    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+                    out["ocsp_stapled_is_stale"] = nu < now
+                    out["ocsp_stapled_stale_by_days"] = int((now - nu).days) if nu < now else 0
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
 def _try_get_ocsp_staple(ssock: ssl.SSLSocket) -> Dict[str, Any]:
     """
     Best-effort OCSP stapling detection.
@@ -365,6 +503,14 @@ def _try_get_ocsp_staple(ssock: ssl.SSLSocket) -> Dict[str, Any]:
         "ocsp_stapled": False,
         "ocsp_stapled_len": 0,
         "ocsp_stapled_sha256": "",
+
+        "ocsp_stapled_status": "",
+        "ocsp_stapled_this_update": "",
+        "ocsp_stapled_next_update": "",
+        "ocsp_stapled_produced_at": "",
+
+        "ocsp_reachability": [],
+        "crl_reachability": [],
     }
 
     try:
@@ -469,6 +615,10 @@ def scan_host(host: str, port: int = 443) -> Dict[str, Any]:
         "error": "",
         "verify_mode": "CERT_REQUIRED",
         "verify_error": "",
+        "verify_code": None,
+        "verify_message": "",
+        "verify_reason": "",
+        "unverified_fallback": False,
 
         "tls_version": "",
         "cipher_name": "",
@@ -497,6 +647,14 @@ def scan_host(host: str, port: int = 443) -> Dict[str, Any]:
         "ocsp_stapled": False,
         "ocsp_stapled_len": 0,
         "ocsp_stapled_sha256": "",
+
+        "ocsp_stapled_status": "",
+        "ocsp_stapled_this_update": "",
+        "ocsp_stapled_next_update": "",
+        "ocsp_stapled_produced_at": "",
+
+        "ocsp_reachability": [],
+        "crl_reachability": [],
 
         "cert_chain": [],
         "chain_length": 0,
@@ -565,6 +723,17 @@ def scan_host(host: str, port: int = 443) -> Dict[str, Any]:
 
                     facts.update(_extract_leaf_extensions(cert))
 
+                    # Revocation endpoint reachability (best-effort)
+                    try:
+                        probes = _probe_revocation_endpoints(
+                            facts.get("ocsp_urls", []),
+                            facts.get("crl_urls", []),
+                            max_urls=2,
+                        )
+                        facts.update(probes)
+                    except Exception:
+                        pass
+
                 # Chain (best-effort)
                 chain_der, chain_source, conf, conf_reason = _get_cert_chain_der_with_source(ssock)
                 facts["chain_source"] = chain_source
@@ -574,6 +743,67 @@ def scan_host(host: str, port: int = 443) -> Dict[str, Any]:
 
     except _SSLCertVerificationError as e:
         facts["verify_error"] = str(e)
+        facts.update(_classify_verify_error(e))
+        facts["unverified_fallback"] = True
+        # Best-effort fallback: collect cert/chain details without verification so we can still produce actionable findings.
+        try:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            try:
+                ctx.set_alpn_protocols(["h2", "http/1.1"])
+            except Exception:
+                pass
+            with socket.create_connection((host, port), timeout=DEFAULT_TIMEOUT) as sock:
+                with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+                    # Populate best-effort facts (do not overwrite verify_error)
+                    if not facts.get("tls_version"):
+                        facts["tls_version"] = ssock.version() or ""
+                    c = ssock.cipher()
+                    if c and not facts.get("cipher_name"):
+                        facts["cipher_name"] = c[0] or ""
+                        facts["cipher_bits"] = c[2] if len(c) > 2 else None
+                    try:
+                        if facts.get("alpn") is None:
+                            facts["alpn"] = ssock.selected_alpn_protocol()
+                    except Exception:
+                        pass
+
+                    # OCSP stapling (best-effort)
+                    facts.update(_try_get_ocsp_staple(ssock))
+
+                    der = ssock.getpeercert(binary_form=True)
+                    if der:
+                        cert = x509.load_der_x509_certificate(der, default_backend())
+                        facts["subject"] = cert.subject.rfc4514_string()
+                        facts["issuer"] = cert.issuer.rfc4514_string()
+                        facts["not_before"] = _utc_iso(cert.not_valid_before)
+                        facts["not_after"] = _utc_iso(cert.not_valid_after)
+                        facts["days_until_expiry"] = _days_until(cert.not_valid_after)
+                        kt, kd = _extract_key_info(cert)
+                        facts["key_type"] = kt
+                        facts["key_detail"] = kd
+                        facts.update(_extract_leaf_extensions(cert))
+
+                        # Revocation endpoint reachability (best-effort)
+                        try:
+                            probes = _probe_revocation_endpoints(
+                                facts.get("ocsp_urls", []),
+                                facts.get("crl_urls", []),
+                                max_urls=2,
+                            )
+                            facts.update(probes)
+                        except Exception:
+                            pass
+
+                    # Chain (best-effort)
+                    chain_der, chain_source, conf, conf_reason = _get_cert_chain_der_with_source(ssock)
+                    facts["chain_source"] = chain_source
+                    facts["chain_confidence"] = conf
+                    facts["chain_confidence_reason"] = conf_reason
+                    facts.update(_analyze_cert_chain(chain_der))
+        except Exception:
+            pass
     except Exception as e:
         facts["error"] = str(e)
 
