@@ -233,6 +233,10 @@
     .diffCard .asset{font-family: var(--mono); font-size: 12px;}
     .diffCard ul{margin:6px 0 0 18px; padding:0;}
     .diffCard li{margin:2px 0; font-size: 12px;}
+  
+    input[type=checkbox]{width:auto; padding:0; border-radius:4px;}
+  
+    .assetLink{cursor:pointer; text-decoration: underline dotted rgba(148,163,184,.35);}
   </style>
 </head>
 <body>
@@ -249,6 +253,10 @@
         </div>
         <div class="tight">
           <button class="btn" id="loadLastBtn">Load last scan</button>
+        <label class="muted" style="font-size:11px; display:flex; align-items:center; gap:8px; margin-left:10px;">
+          <input type="checkbox" id="autoLoadCk" style="width:14px; height:14px; margin:0;">
+          Auto-load last scan
+        </label>
         </div>
         <div class="tight">
           <button class="btn ghost" id="jsonBtn" disabled>JSON</button>
@@ -316,6 +324,37 @@ incomplete-chain.badssl.com</textarea>
       <div class="card">
         <div class="muted" style="font-size:11px;">JSON / Plan Output</div>
         <div id="jsonModal" style="display:none;"></div>
+        <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
+          <div class="muted" style="font-size:11px; margin-bottom:8px;">Asset editor</div>
+          <div class="kvs" style="grid-template-columns: 150px 1fr;">
+            <div>asset_key</div><div><input id="ae_key" placeholder="e.g., google.com:443" /></div>
+            <div>owner</div><div><input id="ae_owner" placeholder="e.g., alice" /></div>
+            <div>team</div><div><input id="ae_team" placeholder="e.g., crypto" /></div>
+            <div>environment</div><div><input id="ae_env" placeholder="prod / staging / dev" /></div>
+            <div>criticality</div>
+            <div>
+              <select id="ae_crit" style="width:100%; background: rgba(2,6,23,.65); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px; outline:none; font-size:12px;">
+                <option value="">—</option>
+                <option value="tier-0">tier-0</option>
+                <option value="tier-1">tier-1</option>
+                <option value="tier-2">tier-2</option>
+                <option value="tier-3">tier-3</option>
+              </select>
+            </div>
+            <div>confidentiality</div><div><input id="ae_conf" placeholder="e.g., 1y / 5y / 10y+" /></div>
+            <div>tags</div><div><input id="ae_tags" placeholder="comma separated, e.g., pqc, internet-facing" /></div>
+            <div>notes</div><div><input id="ae_notes" placeholder="optional" /></div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <div class="tight"><button class="btn ghost" id="ae_load">Load</button></div>
+            <div class="tight"><button class="btn" id="ae_save">Save</button></div>
+            <div class="tight"><span class="muted mono" id="ae_msg"></span></div>
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:8px;">
+            Tip: click a host in the table to load its asset automatically.
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -368,7 +407,47 @@ incomplete-chain.badssl.com</textarea>
   const API_DEFAULT = localStorage.getItem("pqc_api_base") || "http://localhost:8000";
   let API_BASE = API_DEFAULT;
 
-  function headers(){
+  
+
+  // --- Persist UI state (targets + last scan) ---
+  const LS_TARGETS_KEY = "pqc_targets";
+  const LS_LAST_SCAN_KEY = "pqc_last_scan_id";
+  const LS_AUTOLOAD_KEY = "pqc_autoload_last_scan";
+
+  function saveTargetsToStorage(){
+    try{
+      const v = (document.getElementById("targets")?.value || "").trimEnd();
+      localStorage.setItem(LS_TARGETS_KEY, v);
+    }catch(e){}
+  }
+  function loadTargetsFromStorage(){
+    try{
+      const v = localStorage.getItem(LS_TARGETS_KEY);
+      if (v !== null && v !== undefined){
+        const ta = document.getElementById("targets");
+        if (ta) ta.value = v;
+      }
+    }catch(e){}
+  }
+  function saveLastScanId(id){
+    try{ localStorage.setItem(LS_LAST_SCAN_KEY, String(id)); }catch(e){}
+  }
+  function getLastScanId(){
+    try{
+      const v = localStorage.getItem(LS_LAST_SCAN_KEY);
+      return v ? parseInt(v, 10) : null;
+    }catch(e){ return null; }
+  }
+  function isAutoLoadEnabled(){
+    try{
+      return localStorage.getItem(LS_AUTOLOAD_KEY) === "true";
+    }catch(e){ return false; }
+  }
+  function setAutoLoadEnabled(on){
+    try{ localStorage.setItem(LS_AUTOLOAD_KEY, on ? "true" : "false"); }catch(e){}
+  }
+
+function headers(){
     // If you enable API keys in backend, add here:
     // return {"Content-Type":"application/json","X-API-Key": "..."}
     return {"Content-Type":"application/json"};
@@ -383,6 +462,70 @@ incomplete-chain.badssl.com</textarea>
     }
     return await res.json();
   }
+
+  // --- Asset editor helpers ---
+  function setAssetEditorMessage(msg){
+    const el = document.getElementById("ae_msg");
+    if (el) el.textContent = msg || "";
+  }
+
+  function fillAssetEditorFromAsset(asset){
+    document.getElementById("ae_key").value = asset.asset_key || "";
+    document.getElementById("ae_owner").value = asset.owner || "";
+    document.getElementById("ae_team").value = asset.team || "";
+    document.getElementById("ae_env").value = asset.environment || "";
+    document.getElementById("ae_crit").value = asset.criticality || "";
+    document.getElementById("ae_conf").value = asset.confidentiality_lifetime || "";
+    document.getElementById("ae_tags").value = Array.isArray(asset.tags) ? asset.tags.join(", ") : (asset.tags || "");
+    document.getElementById("ae_notes").value = asset.notes || "";
+  }
+
+  async function loadAssetIntoEditor(assetKey){
+    try{
+      if (!assetKey) throw new Error("asset_key is empty");
+      const a = await fetchJson(`/assets/${encodeURIComponent(assetKey)}`);
+      fillAssetEditorFromAsset(a);
+      setAssetEditorMessage("Loaded ✓");
+    }catch(e){
+      setAssetEditorMessage(`Load failed: ${e.message}`);
+    }
+  }
+
+  async function saveEditorToAsset(){
+    try{
+      const assetKey = (document.getElementById("ae_key").value || "").trim();
+      if (!assetKey) throw new Error("asset_key is empty");
+
+      const tagsRaw = (document.getElementById("ae_tags").value || "").trim();
+      const tags = tagsRaw ? tagsRaw.split(",").map(x=>x.trim()).filter(Boolean) : [];
+
+      const payload = {
+        owner: (document.getElementById("ae_owner").value || "").trim(),
+        team: (document.getElementById("ae_team").value || "").trim(),
+        environment: (document.getElementById("ae_env").value || "").trim(),
+        criticality: (document.getElementById("ae_crit").value || "").trim(),
+        confidentiality_lifetime: (document.getElementById("ae_conf").value || "").trim(),
+        tags,
+        notes: (document.getElementById("ae_notes").value || "").trim(),
+      };
+
+      const saved = await fetchJson(`/assets/${encodeURIComponent(assetKey)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      fillAssetEditorFromAsset(saved);
+      setAssetEditorMessage("Saved ✓");
+
+      // Refresh table if a scan is loaded
+      if (typeof currentScanId !== "undefined" && currentScanId){
+        try{ await loadResults(true); }catch(_e){}
+      }
+    }catch(e){
+      setAssetEditorMessage(`Save failed: ${e.message}`);
+    }
+  }
+
+
 
   function openJson(obj, title="JSON"){
     const box = document.getElementById("jsonModal");
@@ -440,6 +583,30 @@ incomplete-chain.badssl.com</textarea>
     if (d.new_count > 0) return `<span class="badge bad">REG +${d.new_count}</span>`;
     if (d.resolved_count > 0) return `<span class="badge ok">IMP -${d.resolved_count}</span>`;
     return `<span class="badge">UNCHANGED</span>`;
+  }
+
+
+  function assetInventoryHtml(r){
+    const ak = r.asset_key || ((r.host && r.port) ? `${r.host}:${r.port}` : "");
+    const tags = Array.isArray(r.asset_tags) ? r.asset_tags : [];
+    const baseline = (r.baseline && (r.baseline.baseline_scan_id || r.baseline.scan_id)) ? (r.baseline.baseline_scan_id || r.baseline.scan_id) : "";
+    const setAt = r.baseline && r.baseline.set_at ? r.baseline.set_at : "";
+    if (!ak && !r.asset_owner && !r.asset_team && !r.asset_environment && !r.asset_criticality && !tags.length) return "";
+    return `
+      <details>
+        <summary><span>Asset inventory</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>asset_key</div><div class="mono"><strong>${escapeHtml(ak || "—")}</strong></div>
+          <div>owner</div><div class="mono"><strong>${escapeHtml(r.asset_owner || "—")}</strong></div>
+          <div>team</div><div class="mono">${escapeHtml(r.asset_team || "—")}</div>
+          <div>environment</div><div class="mono">${escapeHtml(r.asset_environment || "—")}</div>
+          <div>criticality</div><div class="mono"><strong>${escapeHtml(r.asset_criticality || "—")}</strong></div>
+          <div>confidentiality_lifetime</div><div class="mono">${escapeHtml(r.asset_confidentiality_lifetime || "—")}</div>
+          <div>tags</div><div class="mono">${escapeHtml(tags.join(", ") || "—")}</div>
+          <div>baseline_scan_id</div><div class="mono">${escapeHtml(baseline || "—")}${setAt ? ` <span class="muted">(${escapeHtml(setAt)})</span>`:""}</div>
+        </div>
+      </details>
+    `;
   }
 
   function findingsSectionHtml(r){
@@ -621,6 +788,7 @@ incomplete-chain.badssl.com</textarea>
 
   function detailsHtml(r){
     return `
+      ${assetInventoryHtml(r)}
       ${findingsSectionHtml(r)}
       ${tlsSessionHtml(r)}
       ${certExtensionsHtml(r)}
@@ -653,7 +821,7 @@ incomplete-chain.badssl.com</textarea>
             ${detailsHtml(r)}
           </details>
         </td>
-        <td class="mono">${escapeHtml(hp)}</td>
+        <td class="mono assetLink" data-asset="${escapeHtml(hp)}:${escapeHtml(r.port)}" title="Click to load asset editor">${escapeHtml(hp)}</td>
         <td class="mono">${escapeHtml(r.port)}</td>
         <td>
           <div class="cellStack">
@@ -683,6 +851,15 @@ incomplete-chain.badssl.com</textarea>
       return;
     }
     body.innerHTML = results.map((r,i)=>rowHtml(r,i)).join("");
+    // Wire asset editor link clicks
+    document.querySelectorAll(".assetLink").forEach(el=>{
+      el.addEventListener("click", ()=>{
+        const k = el.getAttribute("data-asset") || "";
+        const keyInput = document.getElementById("ae_key");
+        if (keyInput) keyInput.value = k;
+        if (typeof loadAssetIntoEditor === "function") loadAssetIntoEditor(k);
+      });
+    });
   }
 
   // ---------- Sprint 2: baseline & diff observable ----------
@@ -884,6 +1061,7 @@ incomplete-chain.badssl.com</textarea>
     setProgress({total:0, done:0, percent:0});
     setStatus("starting");
 
+    saveTargetsToStorage();
     const raw = document.getElementById("targets").value || "";
     const targets = raw.split("\n").map(x=>x.trim()).filter(Boolean);
     if (!targets.length){
@@ -897,6 +1075,7 @@ incomplete-chain.badssl.com</textarea>
         body: JSON.stringify({targets})
       });
       currentScanId = created.id;
+      saveLastScanId(currentScanId);
       setStatus("running");
       startPolling();
     }catch(e){
@@ -913,6 +1092,7 @@ incomplete-chain.badssl.com</textarea>
         return;
       }
       currentScanId = scans[0].id;
+      saveLastScanId(currentScanId);
       setStatus("loaded");
       // load status + results
       startPolling();
@@ -981,6 +1161,12 @@ incomplete-chain.badssl.com</textarea>
     document.getElementById("apiBase").value = API_BASE;
     document.getElementById("apiBaseLabel").textContent = API_BASE;
 
+    // Restore targets + autoload preference
+    loadTargetsFromStorage();
+    const ck = document.getElementById("autoLoadCk");
+    if (ck){ ck.checked = isAutoLoadEnabled(); ck.onchange = ()=> setAutoLoadEnabled(ck.checked); }
+
+
     document.getElementById("apiBase").addEventListener("change", (e)=>{
       API_BASE = e.target.value.trim() || API_DEFAULT;
       localStorage.setItem("pqc_api_base", API_BASE);
@@ -988,6 +1174,9 @@ incomplete-chain.badssl.com</textarea>
     });
 
     document.getElementById("startBtn").onclick = startScan;
+    const ta = document.getElementById("targets");
+    if (ta){ ta.addEventListener("input", saveTargetsToStorage); }
+
     document.getElementById("loadLastBtn").onclick = loadLastScan;
     document.getElementById("jsonBtn").onclick = viewJson;
     document.getElementById("planBtn").onclick = viewPlan;
@@ -996,12 +1185,28 @@ incomplete-chain.badssl.com</textarea>
     wireDiffPanelButtons();
     renderBaselineIndicator();
 
+    // Asset editor wiring
+    const aeLoad = document.getElementById("ae_load");
+    const aeSave = document.getElementById("ae_save");
+    if (aeLoad) aeLoad.onclick = ()=> loadAssetIntoEditor((document.getElementById("ae_key").value||"").trim());
+    if (aeSave) aeSave.onclick = saveEditorToAsset;
+
+
     // Hard reset UI on refresh (your earlier issue)
     setProgress({total:0, done:0, percent:0});
     setStatus("Ready");
     renderResults([]);
     setBaselineButtonsEnabled(false);
     closeJson();
+
+    // Optional: auto-load last scan on refresh
+    const lastId = getLastScanId();
+    if (isAutoLoadEnabled() && lastId){
+      currentScanId = lastId;
+      setStatus("autoloading", "warn");
+      startPolling();
+      loadResults(true);
+    }
 
     window.addEventListener("error", (ev)=>{
       setStatus(`UI error: ${ev.message || "unknown"}`, "bad");
