@@ -49,6 +49,17 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
         """
     )
 
+    # Baselines table: map an asset (host:port) to a baseline scan id.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS baselines (
+            asset_key TEXT PRIMARY KEY,
+            baseline_scan_id TEXT NOT NULL,
+            set_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_baselines_scan_id ON baselines (baseline_scan_id)")
     cur = conn.execute("PRAGMA table_info(scans)")
     cols = {row[1] for row in cur.fetchall()}
 
@@ -225,3 +236,60 @@ def list_scan_rows(limit: int = 20) -> List[Dict[str, Any]]:
         )
 
     return out
+
+
+def asset_key(host: str, port: int) -> str:
+    return f"{host}:{int(port)}"
+
+
+def set_baseline(asset_key_str: str, baseline_scan_id: str, set_at: Optional[datetime] = None) -> None:
+    set_at = set_at or datetime.utcnow()
+    with closing(get_connection()) as conn:
+        _ensure_columns(conn)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO baselines (asset_key, baseline_scan_id, set_at)
+            VALUES (?, ?, ?)
+            """,
+            (asset_key_str, baseline_scan_id, set_at.isoformat()),
+        )
+        conn.commit()
+
+
+def get_baseline(asset_key_str: str) -> Optional[Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        _ensure_columns(conn)
+        row = conn.execute(
+            "SELECT asset_key, baseline_scan_id, set_at FROM baselines WHERE asset_key = ?",
+            (asset_key_str,),
+        ).fetchone()
+        if not row:
+            return None
+        return {"asset_key": row[0], "baseline_scan_id": row[1], "set_at": row[2]}
+
+
+def list_baselines(limit: int = 500) -> List[Dict[str, Any]]:
+    with closing(get_connection()) as conn:
+        _ensure_columns(conn)
+        rows = conn.execute(
+            "SELECT asset_key, baseline_scan_id, set_at FROM baselines ORDER BY set_at DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return [{"asset_key": r[0], "baseline_scan_id": r[1], "set_at": r[2]} for r in rows]
+
+
+def set_baselines_from_scan(scan_id: str) -> Dict[str, Any]:
+    scan = load_scan_row(scan_id)
+    if not scan:
+        raise ValueError("scan_id not found")
+    results = scan.get("results") or []
+    updated = 0
+    now = datetime.utcnow()
+    for r in results:
+        host = r.get("host") or r.get("hostname") or ""
+        port = int(r.get("port") or 443)
+        if not host:
+            continue
+        set_baseline(asset_key(host, port), scan_id, set_at=now)
+        updated += 1
+    return {"scan_id": scan_id, "updated": updated, "set_at": now.isoformat()}

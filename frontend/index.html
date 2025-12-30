@@ -3,736 +3,1012 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>PQC TLS Scanner</title>
+  <title>Quantum / PQC Migration Tool</title>
   <style>
     :root{
       --bg:#0b1020;
-      --panel:#101a33;
-      --panel2:#0f172a;
-      --text:#e6e9f2;
-      --muted:#a7b0c3;
-      --border:#223055;
-      --accent:#7c3aed;
-      --accent2:#22c55e;
-      --warn:#f59e0b;
-      --bad:#ef4444;
-      --good:#22c55e;
-      --shadow: 0 10px 30px rgba(0,0,0,.35);
-      --radius: 14px;
+      --panel:rgba(12, 18, 36, .72);
+      --panel2:rgba(15,23,42,.65);
+      --border:rgba(148,163,184,.18);
+      --text:#e5e7eb;
+      --muted:#94a3b8;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      --radius:18px;
     }
     *{box-sizing:border-box}
     body{
-      margin:0; font-family:var(--sans); background: radial-gradient(1200px 700px at 10% -10%, rgba(124,58,237,.25), transparent),
-      radial-gradient(900px 600px at 90% 0%, rgba(34,197,94,.18), transparent),
-      var(--bg);
+      margin:0;
+      background: radial-gradient(1200px 600px at 20% -10%, rgba(56,189,248,.18), transparent 55%),
+                  radial-gradient(1000px 600px at 80% 0%, rgba(167,139,250,.16), transparent 55%),
+                  var(--bg);
       color:var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
     }
-    header{
-      padding:22px 22px 10px;
-      max-width:1200px; margin:0 auto;
-      display:flex; align-items:center; justify-content:space-between; gap:16px;
+    .wrap{max-width:1180px; margin:24px auto; padding:0 16px;}
+    .top{
+      display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+      padding:16px 18px;
+      border:1px solid var(--border);
+      background: linear-gradient(180deg, rgba(17, 24, 39, .72), rgba(17, 24, 39, .35));
+      border-radius: var(--radius);
     }
-    .title{
-      display:flex; flex-direction:column; gap:4px;
-    }
-    h1{margin:0; font-size:20px; letter-spacing:.2px}
-    .subtitle{color:var(--muted); font-size:13px}
-    .pill{
-      padding:6px 10px; border:1px solid var(--border); border-radius:999px; font-size:12px; color:var(--muted);
-      background: rgba(16,26,51,.6);
-    }
-    main{max-width:1200px; margin:0 auto; padding:12px 22px 28px; display:flex; flex-direction:column; gap:14px;}
+    .brand{display:flex; flex-direction:column; gap:4px;}
+    .brand h1{margin:0; font-size:18px; letter-spacing:.2px;}
+    .brand .sub{color:var(--muted); font-size:12px;}
+    .mono{font-family: var(--mono);}
+    .muted{color:var(--muted);}
     .grid{
-      display:grid; grid-template-columns: 420px 1fr; gap:14px;
+      display:grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap:14px;
+      margin-top:14px;
     }
-    @media (max-width: 980px){
-      .grid{grid-template-columns: 1fr;}
+    @media (max-width: 960px){
+      .grid{grid-template-columns:1fr;}
     }
     .card{
-      background: linear-gradient(180deg, rgba(16,26,51,.9), rgba(16,26,51,.65));
       border:1px solid var(--border);
-      border-radius:var(--radius);
-      box-shadow: var(--shadow);
+      background: var(--panel);
+      border-radius: var(--radius);
       padding:14px;
     }
-    .card h2{
-      margin:0 0 10px; font-size:14px; font-weight:650; letter-spacing:.2px;
-      display:flex; align-items:center; justify-content:space-between;
-    }
-    .muted{color:var(--muted)}
-    textarea{
-      width:100%; min-height:180px; resize:vertical;
-      background: rgba(15,23,42,.9);
-      color: var(--text);
-      border:1px solid var(--border);
-      border-radius:12px;
-      padding:10px 12px;
-      font-family: var(--mono);
-      font-size: 12px;
-      line-height: 1.4;
-      outline:none;
-    }
-    input[type="text"]{
+    textarea, input{
       width:100%;
-      background: rgba(15,23,42,.9);
+      background: rgba(2,6,23,.65);
       color: var(--text);
-      border:1px solid var(--border);
-      border-radius:12px;
-      padding:10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px 12px;
+      outline:none;
       font-family: var(--mono);
       font-size: 12px;
-      outline:none;
     }
-    .row{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+    textarea{min-height: 132px; resize: vertical;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .row > *{flex: 1;}
+    .row .tight{flex:0 0 auto;}
     .btn{
-      appearance:none; border:1px solid var(--border);
-      background: rgba(124,58,237,.18);
-      color: var(--text);
-      padding:10px 12px;
-      border-radius:12px;
-      font-weight:650;
-      cursor:pointer;
-      transition: transform .06s ease, border-color .15s ease, background .15s ease;
-    }
-    .btn:hover{border-color: rgba(124,58,237,.6); background: rgba(124,58,237,.25);}
-    .btn:active{transform: translateY(1px);}
-    .btn.secondary{background: rgba(34,197,94,.14);}
-    .btn.secondary:hover{border-color: rgba(34,197,94,.6); background: rgba(34,197,94,.22);}
-    .btn.ghost{background: transparent;}
-    .btn:disabled{opacity:.55; cursor:not-allowed}
-    .small{font-size:12px}
-    .kvs{
-      display:grid; grid-template-columns: 140px 1fr;
-      gap:8px 12px;
-      font-size: 12px;
-      color: var(--muted);
-      margin-top: 10px;
-    }
-    .kvs strong{color: var(--text); font-weight:650}
-    .progressWrap{
-      margin-top:10px;
       border:1px solid var(--border);
-      border-radius:999px;
-      overflow:hidden;
-      height:12px;
-      background: rgba(15,23,42,.9);
+      background: rgba(17,24,39,.65);
+      color:var(--text);
+      border-radius: 999px;
+      padding: 9px 12px;
+      font-weight: 600;
+      cursor:pointer;
+      font-size: 12px;
+      transition: transform .04s ease, background .18s ease;
     }
+    .btn:hover{background: rgba(17,24,39,.9)}
+    .btn:active{transform: translateY(1px)}
+    .btn.ghost{background: transparent;}
+    .btn:disabled{opacity:.45; cursor:not-allowed;}
+    .pill{
+      display:inline-flex; align-items:center; gap:6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background: rgba(16,26,51,.55);
+      color: var(--muted);
+    }
+    .pill.ok{border-color: rgba(34,197,94,.6); color:#bbf7d0; background: rgba(34,197,94,.10);}
+    .pill.bad{border-color: rgba(239,68,68,.6); color:#fecaca; background: rgba(239,68,68,.10);}
+    .pill.warn{border-color: rgba(245,158,11,.65); color:#fde68a; background: rgba(245,158,11,.10);}
+
+    .progressWrap{display:flex; flex-direction:column; gap:8px; margin-top:10px;}
     .bar{
+      width:100%;
+      height: 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background: rgba(2,6,23,.55);
+      overflow:hidden;
+    }
+    .bar > div{
       height:100%;
       width:0%;
-      background: linear-gradient(90deg, rgba(124,58,237,.9), rgba(34,197,94,.85));
-      transition: width .25s ease;
+      background: linear-gradient(90deg, rgba(56,189,248,.9), rgba(167,139,250,.9));
     }
-    .statusLine{margin-top:8px; font-size:12px; color: var(--muted); display:flex; justify-content:space-between; gap:10px;}
     table{
       width:100%;
       border-collapse: collapse;
       font-size: 12px;
       overflow:hidden;
-      border-radius: 12px;
+      border-radius: 16px;
       border:1px solid var(--border);
+      background: rgba(2,6,23,.35);
     }
-    th, td{
-      padding:10px 10px;
-      border-bottom: 1px solid rgba(34,48,85,.7);
+    thead th{
+      text-align:left;
+      padding: 10px 10px;
+      background: rgba(15,23,42,.85);
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing:.35px;
+    }
+    tbody td{
+      padding: 10px 10px;
+      border-top: 1px solid rgba(148,163,184,.14);
       vertical-align: top;
     }
-    th{
-      text-align:left;
-      font-size: 11px;
-      color: var(--muted);
-      letter-spacing:.3px;
-      background: rgba(15,23,42,.85);
-      position: sticky;
-      top: 0;
-      z-index: 1;
-    }
-    tr:hover td{background: rgba(15,23,42,.45);}
-    .risk{
-      display:inline-flex; align-items:center; gap:7px;
-      padding:5px 10px;
-      border-radius:999px;
-      font-weight:700;
-      border:1px solid var(--border);
-      background: rgba(15,23,42,.65);
-      font-size:11px;
-    }
-    .risk.critical{border-color: rgba(239,68,68,.6); color: #fecaca; background: rgba(239,68,68,.12);}
-    .risk.high{border-color: rgba(245,158,11,.65); color: #fde68a; background: rgba(245,158,11,.12);}
-    .risk.medium{border-color: rgba(59,130,246,.65); color: #bfdbfe; background: rgba(59,130,246,.12);}
-    .risk.low{border-color: rgba(34,197,94,.55); color: #bbf7d0; background: rgba(34,197,94,.10);}
-    details{
-      border:1px solid rgba(34,48,85,.75);
-      background: rgba(15,23,42,.6);
-      border-radius: 12px;
-      padding: 10px 12px;
-      margin: 10px 0;
-    }
-    details > summary{
-      cursor:pointer;
+    tbody tr:hover td{background: rgba(15,23,42,.35);}
+    details summary{
       list-style:none;
-      font-weight:700;
-      font-size:12px;
-      display:flex; align-items:center; justify-content:space-between;
+      cursor:pointer;
+      display:flex;
+      align-items:center;
       gap:10px;
       user-select:none;
     }
-    details > summary::-webkit-details-marker{display:none}
+    details summary::-webkit-details-marker{display:none;}
     .chev{
-      width:18px; height:18px; border-radius:6px;
-      display:inline-flex; align-items:center; justify-content:center;
-      border:1px solid rgba(34,48,85,.9);
+      display:inline-flex;
+      width:22px; height:22px;
+      border-radius: 8px;
+      border:1px solid var(--border);
+      align-items:center; justify-content:center;
+      background: rgba(15,23,42,.55);
       color: var(--muted);
-      background: rgba(16,26,51,.6);
-      font-family: var(--mono);
-      font-size: 12px;
+      font-weight: 800;
     }
-    details[open] .chev{color: var(--text)}
-    .finding{
-      margin-top:10px;
-      padding:10px;
-      border-radius:12px;
-      border:1px solid rgba(34,48,85,.75);
-      background: rgba(11,16,32,.45);
+    details[open] .chev{transform: rotate(90deg);}
+    .kvs{
+      display:grid;
+      grid-template-columns: 190px 1fr;
+      gap: 8px 10px;
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      background: rgba(2,6,23,.35);
+      border-radius: 14px;
     }
-    .finding .topline{
-      display:flex; align-items:center; justify-content:space-between; gap:10px;
-      margin-bottom:6px;
+    .kvs > div:nth-child(odd){color: var(--muted); font-family: var(--mono); font-size: 11px;}
+    pre{
+      white-space: pre-wrap;
+      word-break: break-word;
+      border:1px solid var(--border);
+      background: rgba(2,6,23,.55);
+      border-radius: 14px;
+      padding: 10px;
+      margin: 10px 0 0 0;
+      font-size: 11px;
     }
     .badge{
-      display:inline-flex;
-      align-items:center;
-      gap:6px;
+      display:inline-flex; align-items:center; gap:6px;
       font-family: var(--mono);
-      font-size: 11px;
-      padding: 4px 8px;
+      font-size: 10px;
+      padding: 3px 8px;
       border-radius: 999px;
       border:1px solid var(--border);
       color: var(--muted);
-      background: rgba(16,26,51,.6);
+      background: rgba(16,26,51,.55);
+      margin-left: 8px;
     }
-    .sev{
-      font-weight:800;
-      letter-spacing:.2px;
-      font-size:11px;
-    }
-    .sev.critical{color:#fecaca}
-    .sev.high{color:#fde68a}
-    .sev.medium{color:#bfdbfe}
-    .sev.low{color:#bbf7d0}
-    .mono{font-family: var(--mono)}
-    pre{
-      margin:8px 0 0;
-      padding:10px;
-      border-radius:12px;
-      border:1px solid rgba(34,48,85,.75);
-      background: rgba(0,0,0,.18);
-      overflow:auto;
-      font-family: var(--mono);
+    .badge.ok{border-color: rgba(34,197,94,.6); color:#bbf7d0; background: rgba(34,197,94,.10);}
+    .badge.bad{border-color: rgba(239,68,68,.6); color:#fecaca; background: rgba(239,68,68,.10);}
+    .badge.warn{border-color: rgba(245,158,11,.65); color:#fde68a; background: rgba(245,158,11,.10);}
+
+    .cellStack{display:flex; flex-direction:column; gap:2px;}
+    .cellSub{font-size:10px; color:var(--muted); font-family: var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px;}
+
+    .miniTable{
+      width:100%;
+      border-collapse: collapse;
       font-size: 11px;
-      line-height: 1.4;
-      color: #dbeafe;
+      overflow:hidden;
+      border-radius: 12px;
+      border:1px solid var(--border);
     }
-    .planItem{
-      padding:10px;
-      border:1px solid rgba(34,48,85,.75);
-      border-radius:12px;
-      background: rgba(11,16,32,.45);
-      margin-top:10px;
+    .miniTable th, .miniTable td{padding:8px 10px;}
+    .miniTable th{background: rgba(15,23,42,.85); color: var(--muted); font-size:10px; letter-spacing:.3px;}
+    .miniTable tr:hover td{background: rgba(15,23,42,.45);}
+
+    /* diff panel */
+    .diffPanel{
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      background: rgba(12, 18, 36, .65);
+      border-radius: 16px;
+      padding: 12px;
+      display:none;
     }
-    .planItem h4{margin:0 0 6px; font-size:12px}
-    .planItem ul{margin:6px 0 0 18px; color: var(--muted); font-size:12px}
-    .rightHeader{
-      display:flex; align-items:center; justify-content:space-between; gap:10px;
-      margin-bottom:10px;
+    .diffHeader{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+    .diffHeader .title{font-weight:700;}
+    .diffStats{display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;}
+    .diffList{
+      margin-top: 10px;
+      display:grid;
+      grid-template-columns: repeat(2, minmax(260px, 1fr));
+      gap: 10px;
     }
+    @media (max-width: 980px){ .diffList{grid-template-columns: 1fr;} }
+    .diffCard{
+      border:1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      background: rgba(15,23,42,.55);
+    }
+    .diffCard .h{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 6px;}
+    .diffCard .asset{font-family: var(--mono); font-size: 12px;}
+    .diffCard ul{margin:6px 0 0 18px; padding:0;}
+    .diffCard li{margin:2px 0; font-size: 12px;}
   </style>
 </head>
 <body>
-  <header>
-    <div class="title">
-      <h1>PQC TLS Scanner</h1>
-      <div class="subtitle">Scan endpoints, see findings with evidence, and generate an ordered TLS migration checklist.</div>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand">
+        <h1>Quantum / PQC Migration Tool</h1>
+        <div class="sub">TLS / PKI posture + PQC readiness • Sprint 2 (Baseline + Diff)</div>
+      </div>
+      <div class="row" style="justify-content:flex-end; flex: 1;">
+        <div class="tight" style="min-width:320px;">
+          <input id="apiBase" placeholder="API base (e.g., http://localhost:8000)" />
+          <div class="muted" style="font-size:11px; margin-top:6px;">Using API: <span class="mono" id="apiBaseLabel"></span></div>
+        </div>
+        <div class="tight">
+          <button class="btn" id="loadLastBtn">Load last scan</button>
+        </div>
+        <div class="tight">
+          <button class="btn ghost" id="jsonBtn" disabled>JSON</button>
+        </div>
+        <div class="tight">
+          <button class="btn ghost" id="planBtn" disabled>Plan</button>
+        </div>
+      </div>
     </div>
-    <div class="pill mono">API: <span id="apiBaseLabel"></span></div>
-  </header>
 
-  <main>
     <div class="grid">
-      <section class="card">
-        <h2>
-          Scan Targets
-          <span class="muted small">one per line</span>
-        </h2>
-
-        <textarea id="targets" spellcheck="false">google.com
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="muted" style="font-size:11px; margin-bottom:8px;">Targets (one per line): host or host:port</div>
+            <textarea id="targets" spellcheck="false">google.com
 facebook.com
-badssl.com
 incomplete-chain.badssl.com</textarea>
-
-        <div class="row" style="margin-top:10px">
-          <button id="startBtn" class="btn">Start scan</button>
-          <button id="loadLastBtn" class="btn ghost">Load last scan</button>
-          <button id="clearBtn" class="btn ghost">Clear</button>
+          </div>
         </div>
-
-        <div style="margin-top:12px">
-          <div class="muted small">Optional API Key (x-api-key)</div>
-          <input id="apiKey" type="text" placeholder="(empty = no auth)" />
-        </div>
-
-        <div class="progressWrap" title="Progress">
-          <div id="progressBar" class="bar"></div>
-        </div>
-        <div class="statusLine">
-          <div id="statusText">Idle</div>
-          <div id="progressText">0%</div>
-        </div>
-
-        <div class="kvs">
-          <div>Scan ID</div><div><strong id="scanId">—</strong></div>
-          <div>Completed</div><div><strong id="doneCounts">—</strong></div>
-          <div>Quantum score</div><div><strong id="quantumScore">—</strong></div>
-        </div>
-
-        <div class="row" style="margin-top:12px">
-          <button id="planBtn" class="btn secondary" disabled>Generate TLS Migration Plan</button>
-        </div>
-        <div id="planBox"></div>
-      </section>
-
-      <section class="card">
-        <div class="rightHeader">
-          <h2 style="margin:0">Results</h2>
-          <div class="row">
-            <button id="refreshBtn" class="btn ghost" disabled>Refresh</button>
-            <button id="jsonBtn" class="btn ghost" disabled>View JSON</button>
+        <div class="row" style="margin-top:10px;">
+          <div class="tight">
+            <button class="btn" id="startBtn">Start scan</button>
+          </div>
+          <div class="tight">
+            <button class="btn ghost" id="baselineBtn" disabled>Set Baseline</button>
+          </div>
+          <div class="tight">
+            <button class="btn ghost" id="diffBtn" disabled>Diff vs Baseline</button>
+          </div>
+          <div class="tight">
+            <span class="pill" id="statusPill">Ready</span>
           </div>
         </div>
 
-        <div style="overflow:auto; max-height: 70vh;">
-          <table>
-            <thead>
-              <tr>
-                <th style="width:36px;"></th>
-                <th>host</th>
-                <th>port</th>
-                <th>tls</th>
-                <th>key</th>
-                <th>sig</th>
-                <th>expiry</th>
-                <th>risk</th>
-                <th>PQC</th>
-              </tr>
-            </thead>
-            <tbody id="resultsBody">
-              <tr><td colspan="9" class="muted">No results yet.</td></tr>
-            </tbody>
-          </table>
+        <div class="progressWrap">
+          <div class="bar"><div id="barFill"></div></div>
+          <div class="muted mono" id="progText">0% (0/0)</div>
         </div>
-        <div id="jsonModal" style="display:none; margin-top:12px"></div>
-      </section>
-    </div>
-  </main>
 
-  <script>
-    const API_BASE = (localStorage.getItem("PQC_API_BASE") || "http://127.0.0.1:8000").replace(/\/+$/,"");
-    document.getElementById("apiBaseLabel").textContent = API_BASE;
+        <div id="baselineIndicator" class="muted" style="margin-top:10px; display:none;">
+          Baseline: <span class="mono" id="baselineText"></span>
+        </div>
 
-    function headers() {
-      const key = document.getElementById("apiKey").value.trim();
-      const h = {"Content-Type":"application/json"};
-      if (key) h["x-api-key"] = key;
-      return h;
-    }
-
-    function escapeHtml(s){
-      return String(s ?? "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
-    }
-
-    function riskBadge(level){
-      const lv = (level||"low").toLowerCase();
-      return `<span class="risk ${lv}">${escapeHtml(lv.toUpperCase())}</span>`;
-    }
-
-    function fmtExpiry(days){
-      if (days === null || days === undefined) return "—";
-      const d = Number(days);
-      if (Number.isNaN(d)) return "—";
-      return `${d}d`;
-    }
-
-    function sevClass(sev){
-      sev = (sev||"low").toLowerCase();
-      return sev;
-    }
-
-    function findingHtml(f){
-      const sev = (f.severity||"low").toLowerCase();
-      const rid = f.rule_id || "";
-      const title = f.title || "";
-      const fix = f.fix || "";
-      const conf = f.confidence || "";
-      const confR = f.confidence_reason || "";
-      const pqc = f.pqc_note || "";
-      const evidence = f.evidence || {};
-
-      return `
-        <div class="finding">
-          <div class="topline">
-            <div>
-              <span class="sev ${sevClass(sev)}">${escapeHtml(sev.toUpperCase())}</span>
-              <span style="margin-left:8px; font-weight:750;">${escapeHtml(title)}</span>
+        <div id="diffPanel" class="diffPanel">
+          <div class="diffHeader">
+            <div class="title">Diff vs baseline</div>
+            <div class="row tight" style="gap:8px;">
+              <button class="btn ghost" id="filterAllBtn">All</button>
+              <button class="btn ghost" id="filterRegBtn">Regressions</button>
+              <button class="btn ghost" id="filterImpBtn">Improvements</button>
+              <button class="btn ghost" id="clearDiffBtn">Clear</button>
             </div>
-            <span class="badge">${escapeHtml(rid)}</span>
           </div>
-          <div class="muted" style="font-size:12px; margin-top:6px;">
-            <strong>Fix:</strong> ${escapeHtml(fix)}
+          <div class="diffStats">
+            <span class="pill bad" id="regCount">Regressions: 0</span>
+            <span class="pill ok" id="impCount">Improvements: 0</span>
+            <span class="pill warn" id="noBaseCount">No baseline: 0</span>
+            <span class="pill" id="sameCount">Unchanged: 0</span>
           </div>
-          <div class="muted" style="font-size:12px; margin-top:6px;">
-            <strong>Confidence:</strong> <span class="mono">${escapeHtml(conf)}</span>${confR ? " — " + escapeHtml(confR) : ""}
+          <div id="diffList" class="diffList"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="muted" style="font-size:11px;">JSON / Plan Output</div>
+        <div id="jsonModal" style="display:none;"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div style="font-weight:700;">Results</div>
+        <div class="muted" style="font-size:11px;">Expand a row for details (TLS, revocation, chain, findings).</div>
+      </div>
+      <div style="margin-top:12px; overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:58px;">+</th>
+              <th>host</th>
+              <th>port</th>
+              <th>TLS</th>
+              <th>key</th>
+              <th>sig</th>
+              <th>expiry</th>
+              <th>risk</th>
+              <th>PQC</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr><td colspan="9" class="muted">No results yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ---------- helpers ----------
+  function escapeHtml(s){
+    return String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+  function setStatus(text, kind=""){
+    const pill = document.getElementById("statusPill");
+    pill.textContent = text;
+    pill.className = "pill" + (kind ? " " + kind : "");
+  }
+  function setProgress(p){
+    const total = p?.total ?? 0;
+    const done = p?.done ?? 0;
+    const percent = p?.percent ?? (total ? Math.round((done/total)*100) : 0);
+    document.getElementById("barFill").style.width = `${percent}%`;
+    document.getElementById("progText").textContent = `${percent}% (${done}/${total})`;
+  }
+
+  const API_DEFAULT = localStorage.getItem("pqc_api_base") || "http://localhost:8000";
+  let API_BASE = API_DEFAULT;
+
+  function headers(){
+    // If you enable API keys in backend, add here:
+    // return {"Content-Type":"application/json","X-API-Key": "..."}
+    return {"Content-Type":"application/json"};
+  }
+
+  async function fetchJson(path, opts={}){
+    const url = path.startsWith("http") ? path : (API_BASE + path);
+    const res = await fetch(url, { ...opts, headers: { ...headers(), ...(opts.headers||{}) } });
+    if (!res.ok){
+      const t = await res.text().catch(()=> "");
+      throw new Error(`HTTP ${res.status}: ${t || res.statusText}`);
+    }
+    return await res.json();
+  }
+
+  function openJson(obj, title="JSON"){
+    const box = document.getElementById("jsonModal");
+    box.style.display = "block";
+    box.innerHTML = `<div class="muted" style="font-size:11px; margin-bottom:8px;">${escapeHtml(title)}</div><pre>${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`;
+  }
+  function closeJson(){
+    const box = document.getElementById("jsonModal");
+    box.style.display = "none";
+    box.innerHTML = "";
+  }
+  function viewJson(){
+    if (!lastResults){
+      alert("No results to show.");
+      return;
+    }
+    const box = document.getElementById("jsonModal");
+    if (box.style.display === "none" || box.style.display === ""){
+      openJson(lastResults, "Results JSON");
+    } else {
+      closeJson();
+    }
+  }
+
+  // ---------- rendering ----------
+  function riskBadge(level){
+    const l = String(level||"").toLowerCase();
+    if (l.includes("critical")) return `<span class="pill bad">CRITICAL</span>`;
+    if (l.includes("high")) return `<span class="pill bad">HIGH</span>`;
+    if (l.includes("medium")) return `<span class="pill warn">MEDIUM</span>`;
+    if (l.includes("low")) return `<span class="pill ok">LOW</span>`;
+    return `<span class="pill">—</span>`;
+  }
+
+  function fmtExpiry(days){
+    if (days === null || days === undefined) return "—";
+    const d = Number(days);
+    if (Number.isNaN(d)) return String(days);
+    if (d < 0) return `${d}d (expired)`;
+    return `${d}d`;
+  }
+
+  function sevClass(sev){
+    const s = String(sev||"").toLowerCase();
+    if (s==="critical" || s==="high") return "bad";
+    if (s==="medium") return "warn";
+    if (s==="low") return "ok";
+    return "";
+  }
+
+  function diffBadgeHtml(r){
+    const d = r && r.__diff;
+    if (!d) return "";
+    if (d.no_baseline) return `<span class="badge warn">NO BASELINE</span>`;
+    if (d.new_count > 0) return `<span class="badge bad">REG +${d.new_count}</span>`;
+    if (d.resolved_count > 0) return `<span class="badge ok">IMP -${d.resolved_count}</span>`;
+    return `<span class="badge">UNCHANGED</span>`;
+  }
+
+  function findingsSectionHtml(r){
+    const f = Array.isArray(r.findings) ? r.findings : [];
+    const rows = f.slice(0, 100).map(x => {
+      const sev = x.severity || "";
+      const cls = sevClass(sev);
+      const evidence = x.evidence ? `<details style="margin-top:6px;"><summary><span class="chev">›</span><span>Evidence</span></summary><pre>${escapeHtml(JSON.stringify(x.evidence, null, 2))}</pre></details>` : "";
+      return `
+        <div class="card" style="background: rgba(2,6,23,.22); margin-top:10px; padding:10px; border-radius:14px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+            <div class="mono" style="font-weight:700;">${escapeHtml(x.id || "FINDING")}</div>
+            <span class="pill ${cls}">${escapeHtml((sev||"").toUpperCase() || "INFO")}</span>
           </div>
-          ${pqc ? `<div class="muted" style="font-size:12px; margin-top:6px;"><strong>PQC:</strong> ${escapeHtml(pqc)}</div>` : ""}
-          <pre>${escapeHtml(JSON.stringify(evidence, null, 2))}</pre>
+          <div class="muted" style="font-size:12px; margin-top:6px;">${escapeHtml(x.title || "")}</div>
+          ${x.remediation ? `<div style="margin-top:8px;"><span class="muted">Fix:</span> ${escapeHtml(x.remediation)}</div>` : ""}
+          ${x.confidence ? `<div style="margin-top:6px;"><span class="muted">Confidence:</span> <span class="mono">${escapeHtml(x.confidence)}</span> — ${escapeHtml(x.confidence_reason || "")}</div>` : ""}
+          ${evidence}
         </div>
       `;
-    }
+    }).join("");
+    return `
+      <details open>
+        <summary><span>Findings</span><span class="chev">›</span></summary>
+        ${rows || `<div class="muted" style="margin-top:10px;">No findings.</div>`}
+      </details>
+    `;
+  }
 
-    function chainHtml(r){
-      const chain = r.cert_chain || [];
-      const rows = chain.map(c => `
+  function reachabilityTable(entries){
+    const list = Array.isArray(entries) ? entries : [];
+    if (!list.length) return `<div class="muted" style="margin-top:10px">No probe data.</div>`;
+    const rows = list.map(e => {
+      const ok = !!e.reachable;
+      const code = (e.status_code === null || e.status_code === undefined) ? "" : String(e.status_code);
+      const ms = (e.elapsed_ms === null || e.elapsed_ms === undefined) ? "" : String(e.elapsed_ms) + "ms";
+      const method = e.method || "";
+      const err = e.error || "";
+      const statusTag = ok ? `<span class="pill ok">reachable</span>` : `<span class="pill bad">unreachable</span>`;
+      return `
         <tr>
-          <td class="mono">${escapeHtml(c.index)}</td>
+          <td class="mono" style="max-width:420px; overflow:hidden; text-overflow:ellipsis">${escapeHtml(e.url || "")}</td>
+          <td>${statusTag}</td>
+          <td class="mono">${escapeHtml(code)}</td>
+          <td class="mono">${escapeHtml(method)}</td>
+          <td class="mono">${escapeHtml(ms)}</td>
+          <td class="mono" style="max-width:260px; overflow:hidden; text-overflow:ellipsis">${escapeHtml(err)}</td>
+        </tr>`;
+    }).join("");
+    return `
+      <div style="overflow:auto; margin-top:10px;">
+        <table class="miniTable">
+          <thead><tr><th>url</th><th>status</th><th>http</th><th>method</th><th>time</th><th>error</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function tlsSessionHtml(r){
+    const supported = Array.isArray(r.tls_supported_versions) ? r.tls_supported_versions : [];
+    const weak = Array.isArray(r.tls12_weak_accepted_ciphers) ? r.tls12_weak_accepted_ciphers : [];
+    const accepted = Array.isArray(r.tls12_accepted_ciphers) ? r.tls12_accepted_ciphers : [];
+    const probeErrors = r.tls_probe_errors || {};
+    return `
+      <details>
+        <summary><span>TLS session & config</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>negotiated_tls</div><div class="mono"><strong>${escapeHtml(r.tls_version || "—")}</strong></div>
+          <div>cipher</div><div class="mono"><strong>${escapeHtml(r.cipher_name || "—")}</strong>${r.cipher_bits ? ` <span class="muted">(${escapeHtml(r.cipher_bits)}b)</span>` : ""}</div>
+          <div>ALPN</div><div class="mono"><strong>${escapeHtml(r.alpn || "—")}</strong></div>
+          <div>supported_versions</div><div class="mono">${escapeHtml(supported.join(", ") || "—")}</div>
+          <div>forward_secrecy_possible</div><div class="mono">${escapeHtml(String(!!r.forward_secrecy_possible))}</div>
+          <div>tls12_accepted_ciphers</div><div class="mono">${escapeHtml(accepted.length ? `${accepted.length} probed` : "—")}</div>
+          <div>tls12_weak_accepted</div><div class="mono">${escapeHtml(weak.length ? `${weak.length}: ${weak.slice(0,8).join(", ")}${weak.length>8?"…":""}` : "—")}</div>
+          <div>verify_mode</div><div class="mono"><strong>${escapeHtml(r.verify_mode || "—")}</strong></div>
+          <div>verify_reason</div><div class="mono">${escapeHtml(r.verify_reason || "—")}</div>
+          <div>verify_error</div><div class="mono">${escapeHtml(r.verify_error || "—")}</div>
+        </div>
+        ${Object.keys(probeErrors || {}).length ? `<pre>${escapeHtml(JSON.stringify(probeErrors, null, 2))}</pre>` : ""}
+      </details>`;
+  }
+
+  function certExtensionsHtml(r){
+    const san = r.san_dns || [];
+    const ku = r.key_usage || {};
+    const eku = r.eku || [];
+    const ocsp = r.ocsp_urls || [];
+    const crl = r.crl_urls || [];
+    const cai = r.ca_issuers_urls || [];
+    const bc = r.basic_constraints || {};
+    const kuList = Object.keys(ku).filter(k=>ku[k]);
+    const bcTxt = (bc && Object.keys(bc).length) ? JSON.stringify(bc) : "";
+    return `
+      <details>
+        <summary><span>Certificate extensions</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>subject</div><div class="mono"><strong>${escapeHtml(r.subject || "")}</strong></div>
+          <div>issuer</div><div class="mono"><strong>${escapeHtml(r.issuer || "")}</strong></div>
+          <div>validity</div><div class="mono">${escapeHtml(r.not_before || "")} → ${escapeHtml(r.not_after || "")}</div>
+          <div>SAN (DNS)</div><div class="mono">${escapeHtml(san.join(", ") || "—")}</div>
+          <div>KeyUsage</div><div class="mono">${escapeHtml(kuList.join(", ") || "—")}</div>
+          <div>EKU</div><div class="mono">${escapeHtml(eku.join(", ") || "—")}</div>
+          <div>BasicConstraints</div><div class="mono">${escapeHtml(bcTxt || "—")}</div>
+          <div>OCSP URLs (AIA)</div><div class="mono">${escapeHtml(ocsp.join(", ") || "—")}</div>
+          <div>CA Issuers (AIA)</div><div class="mono">${escapeHtml(cai.join(", ") || "—")}</div>
+          <div>CRL URLs</div><div class="mono">${escapeHtml(crl.join(", ") || "—")}</div>
+        </div>
+      </details>`;
+  }
+
+  function revocationHtml(r){
+    const ocspUrls = Array.isArray(r.ocsp_urls) ? r.ocsp_urls : [];
+    const crlUrls = Array.isArray(r.crl_urls) ? r.crl_urls : [];
+    const ocspReach = r.ocsp_reachability || [];
+    const crlReach = r.crl_reachability || [];
+    const stapled = !!r.ocsp_stapled;
+    const status = (r.ocsp_stapled_status || "").toLowerCase();
+    let stapledTxt = "not observed";
+    if (stapled){
+      stapledTxt = status ? `present (${status})` : "present";
+    }
+    return `
+      <details>
+        <summary><span>Revocation posture (OCSP / CRL)</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>OCSP AIA URLs</div><div class="mono">${escapeHtml(ocspUrls.join(", ") || "—")}</div>
+          <div>CRL URLs</div><div class="mono">${escapeHtml(crlUrls.join(", ") || "—")}</div>
+          <div>OCSP stapling</div><div class="mono"><strong>${escapeHtml(stapledTxt)}</strong></div>
+          <div>thisUpdate</div><div class="mono">${escapeHtml(r.ocsp_stapled_this_update || "—")}</div>
+          <div>nextUpdate</div><div class="mono">${escapeHtml(r.ocsp_stapled_next_update || "—")}</div>
+        </div>
+        <details style="margin-top:10px;">
+          <summary><span>OCSP endpoint reachability</span><span class="chev">›</span></summary>
+          ${reachabilityTable(ocspReach)}
+        </details>
+        <details style="margin-top:10px;">
+          <summary><span>CRL endpoint reachability</span><span class="chev">›</span></summary>
+          ${reachabilityTable(crlReach)}
+        </details>
+      </details>`;
+  }
+
+  function chainHtml(r){
+    const chain = r.cert_chain || [];
+    const rows = chain.map(c => {
+      const key = c.key || ((c.key_type||"") + (c.key_detail ? " / " + c.key_detail : ""));
+      const sig = c.sig || c.sig_algorithm || "";
+      const fp = (c.fingerprint_sha256 || c.serial_hex || c.fingerprint || "");
+      return `
+        <tr>
+          <td class="mono">${escapeHtml(c.index ?? "")}</td>
           <td>${escapeHtml(c.subject || "")}</td>
           <td>${escapeHtml(c.issuer || "")}</td>
           <td class="mono">${escapeHtml(c.not_before || "")}</td>
           <td class="mono">${escapeHtml(c.not_after || "")}</td>
-          <td class="mono">${escapeHtml((c.key_type||"") + (c.key_detail ? " / " + c.key_detail : ""))}</td>
-          <td class="mono">${escapeHtml(c.sig_algorithm || "")}</td>
-          <td class="mono">${escapeHtml((c.fingerprint_sha256 || c.serial_hex || "").slice(0, 18))}…</td>
-        </tr>
-      `).join("");
+          <td class="mono">${escapeHtml(key || "")}</td>
+          <td class="mono">${escapeHtml(sig || "")}</td>
+          <td class="mono">${escapeHtml((fp || "").slice(0, 18))}${fp ? "…" : ""}</td>
+        </tr>`;
+    }).join("");
 
-      return `
-        <details>
-          <summary>
-            <span>Certificate chain</span>
-            <span class="chev">›</span>
-          </summary>
-          <div class="kvs" style="margin-top:10px">
-            <div>chain_length</div><div><strong>${escapeHtml(r.chain_length)}</strong></div>
-            <div>chain_issues</div><div><strong>${escapeHtml(r.chain_issues)}</strong></div>
-            <div>chain_source</div><div><strong class="mono">${escapeHtml(r.chain_source)}</strong></div>
-            <div>confidence</div><div><strong class="mono">${escapeHtml(r.chain_confidence || "")}</strong></div>
-            <div>note</div><div>${escapeHtml(r.chain_confidence_reason || "")}</div>
-          </div>
-
-          <div style="overflow:auto; margin-top:10px;">
-            <table>
-              <thead>
-                <tr>
-                  <th>#</th><th>subject</th><th>issuer</th><th>not_before</th><th>not_after</th><th>key</th><th>sig</th><th>fp/serial</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows || `<tr><td colspan="8" class="muted">No chain details returned.</td></tr>`}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      `;
-    }
-
-    function certExtensionsHtml(r){
-      const san = r.san_dns || [];
-      const ku = r.key_usage || {};
-      const eku = r.eku || [];
-      const ocsp = r.ocsp_urls || [];
-      const crl = r.crl_urls || [];
-      const cai = r.ca_issuers_urls || [];
-
-      return `
-        <details>
-          <summary>
-            <span>Certificate extensions</span>
-            <span class="chev">›</span>
-          </summary>
-
-          <div class="kvs" style="margin-top:10px">
-            <div>subject</div><div class="mono"><strong>${escapeHtml(r.subject || "")}</strong></div>
-            <div>issuer</div><div class="mono"><strong>${escapeHtml(r.issuer || "")}</strong></div>
-            <div>SAN (DNS)</div><div class="mono">${escapeHtml(san.join(", ") || "—")}</div>
-            <div>KeyUsage</div><div class="mono">${escapeHtml(Object.keys(ku).filter(k=>ku[k]).join(", ") || "—")}</div>
-            <div>EKU</div><div class="mono">${escapeHtml(eku.join(", ") || "—")}</div>
-            <div>OCSP URLs (AIA)</div><div class="mono">${escapeHtml(ocsp.join(", ") || "—")}</div>
-            <div>CA Issuers (AIA)</div><div class="mono">${escapeHtml(cai.join(", ") || "—")}</div>
-            <div>CRL URLs</div><div class="mono">${escapeHtml(crl.join(", ") || "—")}</div>
-            <div>OCSP stapled</div><div class="mono"><strong>${escapeHtml(String(r.ocsp_stapled))}</strong> <span class="muted">${escapeHtml(r.ocsp_stapling_probe || "")}</span></div>
-          </div>
-        </details>
-      `;
-    }
-
-    function findingsSectionHtml(r){
-      const list = r.findings || [];
-      const items = list.map(f => findingHtml(f)).join("");
-      return `
-        <details open>
-          <summary>
-            <span>${list.length} finding(s)</span>
-            <span class="chev">›</span>
-          </summary>
-          ${items || `<div class="muted" style="margin-top:10px">No findings.</div>`}
-        </details>
-      `;
-    }
-
-    function detailsHtml(r){
-      return `
-        ${findingsSectionHtml(r)}
-        ${certExtensionsHtml(r)}
-        ${chainHtml(r)}
-      `;
-    }
-
-    function rowHtml(r, idx){
-      const hp = `${r.host || ""}`;
-      const tls = r.tls_version || "—";
-      const key = (r.key_type || "—") + (r.key_detail ? " / " + r.key_detail : "");
-      const sig = r.sig_algorithm || "—";
-      const exp = fmtExpiry(r.days_until_expiry);
-      const risk = riskBadge(r.risk || r.risk_level || "low");
-      const pqc = (r.pqc_relevance || "—");
-
-      const summaryCell = `
-        <div class="muted small">
-          ${r.error ? `<span class="mono">${escapeHtml(r.error)}</span>` : ""}
-          ${r.verify_error ? `<div>verify_error: <span class="mono">${escapeHtml(r.verify_error)}</span></div>` : ""}
+    return `
+      <details>
+        <summary><span>Certificate chain</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>chain_length</div><div class="mono"><strong>${escapeHtml(r.chain_length ?? "")}</strong></div>
+          <div>chain_issues</div><div class="mono"><strong>${escapeHtml(Array.isArray(r.chain_issues) ? r.chain_issues.join(", ") : (r.chain_issues ?? ""))}</strong></div>
+          <div>chain_source</div><div class="mono"><strong>${escapeHtml(r.chain_source || "")}</strong></div>
+          <div>confidence</div><div class="mono">${escapeHtml(r.chain_confidence || "")}</div>
         </div>
-      `;
+        <div style="overflow:auto; margin-top:10px;">
+          <table>
+            <thead><tr><th>#</th><th>subject</th><th>issuer</th><th>not_before</th><th>not_after</th><th>key</th><th>sig</th><th>fp/serial</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="8" class="muted">No chain details returned.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </details>`;
+  }
 
-      return `
-        <tr>
-          <td>
-            <details>
-              <summary><span class="chev">›</span></summary>
-              ${detailsHtml(r)}
-            </details>
-          </td>
-          <td class="mono">${escapeHtml(hp)}</td>
-          <td class="mono">${escapeHtml(r.port)}</td>
-          <td class="mono">${escapeHtml(tls)}</td>
-          <td class="mono">${escapeHtml(key)}</td>
-          <td class="mono">${escapeHtml(sig)}</td>
-          <td class="mono">${escapeHtml(exp)}</td>
-          <td>${risk}</td>
-          <td class="mono">${escapeHtml(pqc)}</td>
-        </tr>
-      `;
+  function detailsHtml(r){
+    return `
+      ${findingsSectionHtml(r)}
+      ${tlsSessionHtml(r)}
+      ${certExtensionsHtml(r)}
+      ${revocationHtml(r)}
+      ${chainHtml(r)}
+    `;
+  }
+
+  function rowHtml(r, idx){
+    const hp = `${r.host || ""}`;
+    const tls = r.tls_version || "—";
+    const key = (r.key_type || "—") + (r.key_detail ? " / " + r.key_detail : "");
+    const sig = r.sig_algorithm || "—";
+    const exp = fmtExpiry(r.days_until_expiry);
+    const risk = riskBadge(r.risk || r.risk_level || "low");
+    const pqc = (r.pqc_relevance || "—");
+    const pqcRec = r.pqc_recommendation || "";
+
+    const tlsSub = [
+      r.alpn ? `ALPN:${r.alpn}` : "",
+      r.cipher_name ? r.cipher_name : "",
+      r.cipher_bits ? `${r.cipher_bits}b` : ""
+    ].filter(Boolean).join(" • ");
+
+    return `
+      <tr>
+        <td>
+          <details>
+            <summary><span class="chev">›</span>${diffBadgeHtml(r)}</summary>
+            ${detailsHtml(r)}
+          </details>
+        </td>
+        <td class="mono">${escapeHtml(hp)}</td>
+        <td class="mono">${escapeHtml(r.port)}</td>
+        <td>
+          <div class="cellStack">
+            <div class="mono">${escapeHtml(tls)}</div>
+            ${tlsSub ? `<div class="cellSub">${escapeHtml(tlsSub)}</div>` : `<div class="cellSub">—</div>`}
+          </div>
+        </td>
+        <td class="mono">${escapeHtml(key)}</td>
+        <td class="mono">${escapeHtml(sig)}</td>
+        <td class="mono">${escapeHtml(exp)}</td>
+        <td>${risk}</td>
+        <td>
+          <div class="cellStack">
+            <div class="mono">${escapeHtml(pqc)}</div>
+            ${pqcRec ? `<div class="cellSub">${escapeHtml(pqcRec)}</div>` : `<div class="cellSub">—</div>`}
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderResults(rows){
+    const results = Array.isArray(rows) ? rows : [];
+    const body = document.getElementById("resultsBody");
+    if (!results.length){
+      body.innerHTML = `<tr><td colspan="9" class="muted">No results yet.</td></tr>`;
+      return;
     }
+    body.innerHTML = results.map((r,i)=>rowHtml(r,i)).join("");
+  }
 
-    function setProgress(prog){
-      const bar = document.getElementById("progressBar");
-      const pct = prog?.percent ?? 0;
-      bar.style.width = `${pct}%`;
-      document.getElementById("progressText").textContent = `${pct}%`;
-      const done = prog?.done ?? 0;
-      const total = prog?.total ?? 0;
-      document.getElementById("doneCounts").textContent = `${done}/${total}`;
+  // ---------- Sprint 2: baseline & diff observable ----------
+  let lastDiff = null;
+  let diffFilterMode = "all"; // all | reg | imp
+  function setBaselineButtonsEnabled(on){
+    document.getElementById("baselineBtn").disabled = !on;
+    document.getElementById("diffBtn").disabled = !on;
+  }
+  function saveBaselineInfo(scanId){
+    try{
+      localStorage.setItem("pqc_baseline_info", JSON.stringify({scan_id: scanId, set_at: new Date().toISOString()}));
+    }catch(e){}
+    renderBaselineIndicator();
+  }
+  function renderBaselineIndicator(){
+    const el = document.getElementById("baselineIndicator");
+    const t = document.getElementById("baselineText");
+    let info = null;
+    try{ info = JSON.parse(localStorage.getItem("pqc_baseline_info") || "null"); }catch(e){ info=null; }
+    if (!info || !info.scan_id){
+      el.style.display = "none";
+      t.textContent = "";
+      return;
     }
-
-    function setStatus(text){
-      document.getElementById("statusText").textContent = text;
+    el.style.display = "block";
+    t.textContent = `scan_id=${info.scan_id} • set_at=${info.set_at || ""}`;
+  }
+  function normalizeDiffPayload(d){
+    if (!d) return [];
+    if (Array.isArray(d)) return d;
+    if (Array.isArray(d.assets)) return d.assets;
+    if (Array.isArray(d.results)) return d.results;
+    if (Array.isArray(d.diff)) return d.diff;
+    return [];
+  }
+  function keyForRow(r){
+    const h = r.host || "";
+    const p = r.port != null ? String(r.port) : "443";
+    return `${h}:${p}`;
+  }
+  function applyDiffBadges(){
+    if (!lastResults) return;
+    const rows = (lastResults.results || lastResults || []);
+    const diffArr = normalizeDiffPayload(lastDiff);
+    const map = new Map();
+    for (const d of diffArr){
+      const k = d.asset_key || d.key || d.asset || "";
+      map.set(k, d);
     }
+    for (const r of rows){
+      const k = keyForRow(r);
+      const d = map.get(k);
+      if (!d) { r.__diff = null; continue; }
+      const newF = Array.isArray(d.new_findings) ? d.new_findings : [];
+      const resF = Array.isArray(d.resolved_findings) ? d.resolved_findings : [];
+      const unch = Array.isArray(d.unchanged_findings) ? d.unchanged_findings : [];
+      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || (!d.baseline_scan_id && (newF.length===0 && resF.length===0 && unch.length===0));
+      r.__diff = { new_count: newF.length, resolved_count: resF.length, no_baseline: nb };
+    }
+  }
+  function renderDiffPanel(){
+    const panel = document.getElementById("diffPanel");
+    const list = document.getElementById("diffList");
+    const diffArr = normalizeDiffPayload(lastDiff);
 
-    function setSummary(summary){
-      if (!summary || Object.keys(summary).length === 0){
-        document.getElementById("quantumScore").textContent = "—";
-        return;
+    if (!diffArr.length){
+      panel.style.display = "none";
+      list.innerHTML = "";
+      return;
+    }
+    panel.style.display = "block";
+
+    let reg=0, imp=0, same=0, nob=0;
+    const cards = [];
+    for (const d of diffArr){
+      const asset = d.asset_key || d.key || d.asset || "—";
+      const newF = Array.isArray(d.new_findings) ? d.new_findings : [];
+      const resF = Array.isArray(d.resolved_findings) ? d.resolved_findings : [];
+      const unch = Array.isArray(d.unchanged_findings) ? d.unchanged_findings : [];
+      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || (!d.baseline_scan_id && (newF.length===0 && resF.length===0 && unch.length===0));
+
+      if (nb) nob++;
+      else if (newF.length>0) reg++;
+      else if (resF.length>0) imp++;
+      else same++;
+
+      if (diffFilterMode === "reg" && !(newF.length>0)) continue;
+      if (diffFilterMode === "imp" && !(resF.length>0)) continue;
+
+      const tag = nb ? `<span class="pill warn">No baseline</span>` :
+                 (newF.length>0 ? `<span class="pill bad">Regressions: ${newF.length}</span>` :
+                  (resF.length>0 ? `<span class="pill ok">Improvements: ${resF.length}</span>` :
+                   `<span class="pill">Unchanged</span>`));
+
+      let items = "";
+      if (newF.length){
+        items += `<div class="muted" style="margin-top:6px;">New findings</div><ul>${newF.slice(0,10).map(x=>`<li class="mono">${escapeHtml(x)}</li>`).join("")}${newF.length>10?`<li class="muted">+${newF.length-10} more…</li>`:""}</ul>`;
       }
-      document.getElementById("quantumScore").textContent = `${summary.quantum_risk_score ?? "—"} (${summary.quantum_risk_level ?? "—"})`;
+      if (resF.length){
+        items += `<div class="muted" style="margin-top:6px;">Resolved</div><ul>${resF.slice(0,10).map(x=>`<li class="mono">${escapeHtml(x)}</li>`).join("")}${resF.length>10?`<li class="muted">+${resF.length-10} more…</li>`:""}</ul>`;
+      }
+      if (!newF.length && !resF.length && !nb){
+        items += `<div class="muted" style="margin-top:6px;">No changes vs baseline.</div>`;
+      }
+
+      cards.push(`
+        <div class="diffCard">
+          <div class="h">
+            <div class="asset">${escapeHtml(asset)}</div>
+            ${tag}
+          </div>
+          ${items}
+        </div>
+      `);
     }
 
-    let currentScanId = null;
-    let lastResults = null;
+    document.getElementById("regCount").textContent = `Regressions: ${reg}`;
+    document.getElementById("impCount").textContent = `Improvements: ${imp}`;
+    document.getElementById("noBaseCount").textContent = `No baseline: ${nob}`;
+    document.getElementById("sameCount").textContent = `Unchanged: ${same}`;
+    list.innerHTML = cards.join("") || `<div class="muted">No items for this filter.</div>`;
+  }
 
-    async function startScan(){
-      const lines = document.getElementById("targets").value.split("\n").map(s=>s.trim()).filter(Boolean);
-      if (!lines.length){
-        alert("Add at least one target.");
-        return;
-      }
-      setStatus("Starting scan…");
-      document.getElementById("resultsBody").innerHTML = `<tr><td colspan="9" class="muted">Starting…</td></tr>`;
-      document.getElementById("planBox").innerHTML = "";
-      document.getElementById("planBtn").disabled = true;
-      document.getElementById("refreshBtn").disabled = true;
-      document.getElementById("jsonBtn").disabled = true;
+  // ---------- scanning ----------
+  let currentScanId = null;
+  let lastResults = null;
+  let pollTimer = null;
 
-      const res = await fetch(`${API_BASE}/scans`, {
-        method:"POST",
-        headers: headers(),
-        body: JSON.stringify({targets: lines})
-      });
-
-      if (!res.ok){
-        const t = await res.text();
-        throw new Error(`Failed to start scan: ${t}`);
-      }
-      const data = await res.json();
-      currentScanId = data.id;
-      localStorage.setItem("PQC_LAST_SCAN_ID", currentScanId);
-      document.getElementById("scanId").textContent = currentScanId;
-      setProgress(data.progress);
-      setStatus(`Running (${data.progress.done}/${data.progress.total})…`);
-
-      document.getElementById("refreshBtn").disabled = false;
-      pollProgress();
+  function stopPolling(){
+    if (pollTimer){
+      clearInterval(pollTimer);
+      pollTimer = null;
     }
+  }
 
-    async function pollProgress(){
-      if (!currentScanId) return;
-      while(true){
-        const st = await fetch(`${API_BASE}/scans/${currentScanId}`, {headers: headers()});
-        if (!st.ok) break;
-        const status = await st.json();
-
-        setProgress(status.progress);
-        setStatus(`${status.status} (${status.progress.done}/${status.progress.total})`);
-
-        if (status.status === "completed" || status.status === "failed"){
-          await loadResults();
-          document.getElementById("planBtn").disabled = false;
-          document.getElementById("jsonBtn").disabled = false;
-          return;
-        }
-        await new Promise(r=>setTimeout(r, 700));
-      }
-    }
-
-    async function loadResults(){
-      if (!currentScanId) return;
-      const res = await fetch(`${API_BASE}/scans/${currentScanId}/results`, {headers: headers()});
-      if (!res.ok){
-        const t = await res.text();
-        throw new Error(`Failed to load results: ${t}`);
-      }
-      const data = await res.json();
+  async function loadResults(allowPartial=true){
+    if (!currentScanId) return;
+    try{
+      const data = await fetchJson(`/scans/${currentScanId}/results`);
       lastResults = data;
-
-      setProgress(data.progress);
-      setSummary(data.summary);
-
-      const results = data.results || [];
-      if (!results.length){
-        document.getElementById("resultsBody").innerHTML = `<tr><td colspan="9" class="muted">No results returned.</td></tr>`;
-      } else {
-        document.getElementById("resultsBody").innerHTML = results.map((r,i)=>rowHtml(r,i)).join("");
+      // clear diff when loading new results (unless diff just fetched)
+      if (!allowPartial){
+        // keep lastDiff as-is
       }
-      document.getElementById("refreshBtn").disabled = false;
-      document.getElementById("jsonBtn").disabled = false;
-    }
-
-    async function loadLastScan(){
-      const sid = localStorage.getItem("PQC_LAST_SCAN_ID");
-      if (!sid){
-        alert("No previous scan id found.");
-        return;
-      }
-      currentScanId = sid;
-      document.getElementById("scanId").textContent = sid;
-      setStatus("Loading last scan…");
-      await loadResults();
-      document.getElementById("planBtn").disabled = false;
-    }
-
-    async function buildPlan(){
-      if (!currentScanId) return;
-      document.getElementById("planBox").innerHTML = `<div class="muted" style="margin-top:10px">Generating…</div>`;
-      const res = await fetch(`${API_BASE}/scans/${currentScanId}/migration-plan`, {headers: headers()});
-      if (!res.ok){
-        const t = await res.text();
-        document.getElementById("planBox").innerHTML = `<div class="muted" style="margin-top:10px">Error: ${escapeHtml(t)}</div>`;
-        return;
-      }
-      const data = await res.json();
-      const items = data.items || [];
-      if (!items.length){
-        document.getElementById("planBox").innerHTML = `<div class="muted" style="margin-top:10px">No plan items returned.</div>`;
-        return;
-      }
-      document.getElementById("planBox").innerHTML = items.map(it => `
-        <div class="planItem">
-          <h4>${escapeHtml(it.step || "")} <span class="badge" style="margin-left:8px">${escapeHtml(it.rule_id || "")}</span></h4>
-          <div class="muted" style="font-size:12px">${escapeHtml(it.why || "")}</div>
-          <ul>
-            ${(it.affected || []).slice(0, 12).map(a=>`<li class="mono">${escapeHtml(a)}</li>`).join("")}
-            ${(it.affected || []).length > 12 ? `<li class="muted">…and more</li>` : ""}
-          </ul>
-          ${(it.evidence_samples && it.evidence_samples.length) ? `<pre>${escapeHtml(JSON.stringify(it.evidence_samples, null, 2))}</pre>` : ""}
-        </div>
-      `).join("");
-    }
-
-    function viewJson(){
-      if (!lastResults){
-        alert("No results to show.");
-        return;
-      }
-      const box = document.getElementById("jsonModal");
-      if (box.style.display === "none"){
-        box.style.display = "block";
-        box.innerHTML = `<pre>${escapeHtml(JSON.stringify(lastResults, null, 2))}</pre>`;
-      } else {
-        box.style.display = "none";
-        box.innerHTML = "";
+      const rows = data.results || [];
+      applyDiffBadges();
+      renderResults(rows);
+      document.getElementById("jsonBtn").disabled = rows.length === 0;
+      document.getElementById("planBtn").disabled = rows.length === 0;
+      setBaselineButtonsEnabled(rows.length !== 0);
+    }catch(e){
+      // during running, results may not yet exist: show status but don't break UI
+      if (!allowPartial){
+        setStatus(`Results error: ${e.message}`, "warn");
       }
     }
+  }
 
-    document.getElementById("startBtn").addEventListener("click", async () => {
+  function startPolling(){
+    stopPolling();
+    if (!currentScanId) return;
+
+    const tick = async () => {
       try{
-        document.getElementById("startBtn").disabled = true;
-        await startScan();
-      } catch(e){
-        alert(String(e));
-        setStatus("Error");
-      } finally {
-        document.getElementById("startBtn").disabled = false;
+        const st = await fetchJson(`/scans/${currentScanId}`);
+        setProgress(st.progress);
+        const kind = (st.status === "failed") ? "bad" : (st.status === "completed" ? "ok" : "");
+        setStatus(st.status, kind);
+
+        if (st.status === "running"){
+          // keep table updated while running
+          await loadResults(true);
+        }
+
+        if (st.status === "completed" || st.status === "failed"){
+          stopPolling();
+          await loadResults(false);
+        }
+      }catch(e){
+        setStatus(`Polling error: ${e.message}`, "warn");
       }
-    });
-    document.getElementById("refreshBtn").addEventListener("click", async () => {
-      try{ await loadResults(); } catch(e){ alert(String(e)); }
-    });
-    document.getElementById("planBtn").addEventListener("click", async () => {
-      await buildPlan();
-    });
-    document.getElementById("loadLastBtn").addEventListener("click", async () => {
-      try{ await loadLastScan(); } catch(e){ alert(String(e)); }
-    });
-    document.getElementById("jsonBtn").addEventListener("click", () => viewJson());
-    document.getElementById("clearBtn").addEventListener("click", () => {
-      document.getElementById("targets").value = "";
+    };
+
+    tick();
+    pollTimer = setInterval(tick, 1000);
+  }
+
+  async function startScan(){
+    closeJson();
+    // reset UI
+    lastDiff = null;
+    diffFilterMode = "all";
+    renderDiffPanel();
+    renderResults([]);
+    setBaselineButtonsEnabled(false);
+    document.getElementById("planBtn").disabled = true;
+    document.getElementById("jsonBtn").disabled = true;
+    setProgress({total:0, done:0, percent:0});
+    setStatus("starting");
+
+    const raw = document.getElementById("targets").value || "";
+    const targets = raw.split("\n").map(x=>x.trim()).filter(Boolean);
+    if (!targets.length){
+      alert("Please enter at least one target.");
+      setStatus("Ready");
+      return;
+    }
+    try{
+      const created = await fetchJson(`/scans`, {
+        method:"POST",
+        body: JSON.stringify({targets})
+      });
+      currentScanId = created.id;
+      setStatus("running");
+      startPolling();
+    }catch(e){
+      setStatus(`Start failed: ${e.message}`, "bad");
+    }
+  }
+
+  async function loadLastScan(){
+    closeJson();
+    try{
+      const scans = await fetchJson(`/scans?limit=1`);
+      if (!Array.isArray(scans) || !scans.length){
+        alert("No scans found.");
+        return;
+      }
+      currentScanId = scans[0].id;
+      setStatus("loaded");
+      // load status + results
+      startPolling();
+      await loadResults(true);
+    }catch(e){
+      setStatus(`Load failed: ${e.message}`, "bad");
+    }
+  }
+
+  async function viewPlan(){
+    if (!currentScanId){
+      alert("No scan loaded.");
+      return;
+    }
+    try{
+      const plan = await fetchJson(`/scans/${currentScanId}/migration-plan`);
+      openJson(plan, "Migration Plan");
+    }catch(e){
+      alert(`Plan error: ${e.message}`);
+    }
+  }
+
+  async function setBaseline(){
+    if (!currentScanId){
+      alert("No scan loaded.");
+      return;
+    }
+    const ok = confirm("Set this scan as baseline for all assets in its results?");
+    if (!ok) return;
+    try{
+      await fetchJson(`/baselines/from-scan/${currentScanId}`, {method:"POST"});
+      saveBaselineInfo(currentScanId);
+      setStatus("baseline set", "ok");
+    }catch(e){
+      setStatus(`Baseline error: ${e.message}`, "bad");
+    }
+  }
+
+  async function diffVsBaseline(){
+    if (!currentScanId){
+      alert("No scan loaded.");
+      return;
+    }
+    try{
+      const diff = await fetchJson(`/scans/${currentScanId}/diff`);
+      lastDiff = diff;
+      applyDiffBadges();
+      renderDiffPanel();
+      // re-render table to show badges
+      const rows = lastResults?.results || [];
+      renderResults(rows);
+      openJson(diff, "Diff vs Baseline (raw)");
+    }catch(e){
+      setStatus(`Diff error: ${e.message}`, "bad");
+    }
+  }
+
+  function wireDiffPanelButtons(){
+    document.getElementById("filterAllBtn").onclick = ()=>{ diffFilterMode="all"; renderDiffPanel(); renderResults(lastResults?.results || []); };
+    document.getElementById("filterRegBtn").onclick = ()=>{ diffFilterMode="reg"; renderDiffPanel(); renderResults((lastResults?.results || []).filter(r => r.__diff && !r.__diff.no_baseline && r.__diff.new_count>0)); };
+    document.getElementById("filterImpBtn").onclick = ()=>{ diffFilterMode="imp"; renderDiffPanel(); renderResults((lastResults?.results || []).filter(r => r.__diff && !r.__diff.no_baseline && r.__diff.resolved_count>0)); };
+    document.getElementById("clearDiffBtn").onclick = ()=>{ lastDiff=null; diffFilterMode="all"; renderDiffPanel(); applyDiffBadges(); renderResults(lastResults?.results || []); closeJson(); };
+  }
+
+  function init(){
+    document.getElementById("apiBase").value = API_BASE;
+    document.getElementById("apiBaseLabel").textContent = API_BASE;
+
+    document.getElementById("apiBase").addEventListener("change", (e)=>{
+      API_BASE = e.target.value.trim() || API_DEFAULT;
+      localStorage.setItem("pqc_api_base", API_BASE);
+      document.getElementById("apiBaseLabel").textContent = API_BASE;
     });
 
-    // Auto-load last scan if present
-    (async function init(){
-      const sid = localStorage.getItem("PQC_LAST_SCAN_ID");
-      if (sid){
-        currentScanId = sid;
-        document.getElementById("scanId").textContent = sid;
-        try{
-          await loadResults();
-          document.getElementById("planBtn").disabled = false;
-        } catch(_){}
-      }
-    })();
-  </script>
+    document.getElementById("startBtn").onclick = startScan;
+    document.getElementById("loadLastBtn").onclick = loadLastScan;
+    document.getElementById("jsonBtn").onclick = viewJson;
+    document.getElementById("planBtn").onclick = viewPlan;
+    document.getElementById("baselineBtn").onclick = setBaseline;
+    document.getElementById("diffBtn").onclick = diffVsBaseline;
+    wireDiffPanelButtons();
+    renderBaselineIndicator();
+
+    // Hard reset UI on refresh (your earlier issue)
+    setProgress({total:0, done:0, percent:0});
+    setStatus("Ready");
+    renderResults([]);
+    setBaselineButtonsEnabled(false);
+    closeJson();
+
+    window.addEventListener("error", (ev)=>{
+      setStatus(`UI error: ${ev.message || "unknown"}`, "bad");
+    });
+  }
+
+  init();
+</script>
 </body>
 </html>

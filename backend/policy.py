@@ -56,6 +56,29 @@ def _crl_urls(f: Dict[str, Any]) -> List[str]:
     return [str(x) for x in _get_list(f.get("crl_urls")) if str(x).strip()]
 
 
+
+def _ocsp_reachability(f: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [x for x in _get_list(f.get("ocsp_reachability")) if isinstance(x, dict)]
+
+
+def _crl_reachability(f: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [x for x in _get_list(f.get("crl_reachability")) if isinstance(x, dict)]
+
+
+def _any_unreachable(entries: List[Dict[str, Any]]) -> bool:
+    for e in entries or []:
+        try:
+            if not bool(e.get("reachable", False)):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _ocsp_stapled_status(f: Dict[str, Any]) -> str:
+    return str(f.get("ocsp_stapled_status") or "").strip().lower()
+
+
 def _tls_versions(f: Dict[str, Any]) -> List[str]:
     return [str(x) for x in _get_list(f.get("tls_supported_versions")) if str(x).strip()]
 
@@ -159,17 +182,106 @@ RULES: List[Dict[str, Any]] = [
     },
 
     # Chain & verify
+    
+    # Verify failure classification
+    {
+        "id": "VERIFY_HOSTNAME_MISMATCH",
+        "title": "Hostname does not match certificate (SAN/CN mismatch)",
+        "severity": "high",
+        "when": lambda f: str(f.get("verify_reason") or "") == "hostname_mismatch",
+        "evidence": lambda f: {
+            "verify_error": str(f.get("verify_error") or ""),
+            "verify_code": f.get("verify_code"),
+            "verify_message": str(f.get("verify_message") or ""),
+            "san_dns": _san_dns(f)[:20],
+        },
+        "remediation": "Issue a certificate that includes the correct DNS name in SAN and ensure the client connects using the expected hostname.",
+        "pqc_mapping": "Correct identity binding prevents migration incidents during crypto transitions.",
+        "confidence": "high",
+        "confidence_reason": "verify_reason is derived from the TLS verification stack's hostname mismatch error.",
+    },
+    {
+        "id": "VERIFY_EXPIRED",
+        "title": "Certificate is expired (verification failed)",
+        "severity": "high",
+        "when": lambda f: str(f.get("verify_reason") or "") == "expired",
+        "evidence": lambda f: {
+            "verify_error": str(f.get("verify_error") or ""),
+            "verify_code": f.get("verify_code"),
+            "verify_message": str(f.get("verify_message") or ""),
+            "not_after": _get_str(f.get("not_after")),
+            "days_until_expiry": int(f.get("days_until_expiry") or 0),
+        },
+        "remediation": "Renew and deploy a valid certificate. Ensure automated renewal and monitoring are in place.",
+        "pqc_mapping": "Operational certificate health is foundational for safe PQC/hybrid rollout waves.",
+        "confidence": "high",
+        "confidence_reason": "verify_reason is derived from the TLS verification stack's expiry error.",
+    },
+    {
+        "id": "VERIFY_REVOKED",
+        "title": "Certificate appears revoked (verification failed)",
+        "severity": "critical",
+        "when": lambda f: str(f.get("verify_reason") or "") == "revoked",
+        "evidence": lambda f: {
+            "verify_error": str(f.get("verify_error") or ""),
+            "verify_code": f.get("verify_code"),
+            "verify_message": str(f.get("verify_message") or ""),
+        },
+        "remediation": "Replace the certificate immediately. Investigate the revocation cause and validate key handling/incident response.",
+        "pqc_mapping": "Revocation hygiene becomes more important during high-volume cert rotations and transitions.",
+        "confidence": "high",
+        "confidence_reason": "verify_reason is derived from the TLS verification stack's revoked indication.",
+    },
+    {
+        "id": "VERIFY_UNTRUSTED_ISSUER",
+        "title": "Certificate chain is untrusted (unknown or self-signed issuer)",
+        "severity": "medium",
+        "when": lambda f: str(f.get("verify_reason") or "") == "untrusted_issuer",
+        "evidence": lambda f: {
+            "verify_error": str(f.get("verify_error") or ""),
+            "verify_code": f.get("verify_code"),
+            "verify_message": str(f.get("verify_message") or ""),
+            "issuer": _get_str(f.get("issuer")),
+            "chain_source": _get_str(f.get("chain_source")),
+        },
+        "remediation": "Use a certificate issued by a trusted CA for the target environment, or install the proper trust anchor for internal PKI. Ensure intermediates are served.",
+        "pqc_mapping": "Trust consistency reduces surprises when updating crypto primitives and PKI components.",
+        "confidence": "high",
+        "confidence_reason": "verify_reason is derived from common CA trust failure messages.",
+    },
+    {
+        "id": "VERIFY_MISSING_INTERMEDIATE",
+        "title": "Certificate chain may be incomplete (missing intermediate)",
+        "severity": "medium",
+        "when": lambda f: str(f.get("verify_reason") or "") == "missing_intermediate",
+        "evidence": lambda f: {
+            "verify_error": str(f.get("verify_error") or ""),
+            "verify_code": f.get("verify_code"),
+            "verify_message": str(f.get("verify_message") or ""),
+            "chain_length": int(f.get("chain_length") or 0),
+            "chain_issues": _get_list(f.get("chain_issues"))[:10],
+        },
+        "remediation": "Configure the TLS terminator to serve the complete certificate chain (include the correct intermediate certificates).",
+        "pqc_mapping": "Chain correctness is critical for frictionless certificate strategy changes during migrations.",
+        "confidence": "medium",
+        "confidence_reason": "verify_reason is derived from verification errors that commonly indicate missing intermediates.",
+    },
     {
         "id": "VERIFY_FAILED",
         "title": "Certificate verification failed for default trust store",
         "severity": "medium",
-        "when": lambda f: bool(str(f.get("verify_error") or "").strip()),
-        "evidence": lambda f: {"verify_error": str(f.get("verify_error") or "")},
+        "when": lambda f: bool(str(f.get("verify_error") or "").strip()) and str(f.get("verify_reason") or "") in ("", "other", None),
+        "evidence": lambda f: {
+            "verify_error": str(f.get("verify_error") or ""),
+            "verify_code": f.get("verify_code"),
+            "verify_message": str(f.get("verify_message") or ""),
+        },
         "remediation": "Fix chain/hostname/trust issues. Ensure intermediates are served and SAN matches host.",
         "pqc_mapping": "Clean PKI reduces migration surprises.",
         "confidence": "high",
         "confidence_reason": "Reported directly by the TLS verification stack.",
     },
+
     {
         "id": "CHAIN_SHORT_OR_UNAVAILABLE",
         "title": "Certificate chain short or unavailable",
@@ -221,6 +333,36 @@ RULES: List[Dict[str, Any]] = [
         "confidence_reason": "AIA OCSP URLs are read directly from the X.509 certificate extensions.",
     },
 
+
+    {
+        "id": "OCSP_ENDPOINT_UNREACHABLE",
+        "title": "OCSP responder advertised but unreachable",
+        "severity": "medium",
+        "when": lambda f: (len(_ocsp_urls(f)) > 0) and (len(_ocsp_reachability(f)) > 0) and _any_unreachable(_ocsp_reachability(f)),
+        "evidence": lambda f: {
+            "ocsp_urls": _ocsp_urls(f)[:10],
+            "ocsp_reachability": _ocsp_reachability(f)[:5],
+        },
+        "remediation": "Ensure OCSP responder endpoints in AIA are reachable from clients/TLS terminators (DNS, routing, firewalls). If URLs are incorrect, re-issue certificates with correct AIA OCSP URLs.",
+        "pqc_mapping": "Revocation reliability matters during cert churn and transition waves (including PQC/hybrid rollouts).",
+        "confidence": "medium",
+        "confidence_reason": "Reachability is a best-effort HTTP probe; some responders require POST and may not answer HEAD/GET the same way.",
+    },
+    {
+        "id": "CRL_ENDPOINT_UNREACHABLE",
+        "title": "CRL distribution point advertised but unreachable",
+        "severity": "medium",
+        "when": lambda f: (len(_crl_urls(f)) > 0) and (len(_crl_reachability(f)) > 0) and _any_unreachable(_crl_reachability(f)),
+        "evidence": lambda f: {
+            "crl_urls": _crl_urls(f)[:10],
+            "crl_reachability": _crl_reachability(f)[:5],
+        },
+        "remediation": "Ensure CRL distribution point endpoints are reachable from clients/TLS terminators. If URLs are incorrect, update issuing CA configuration and re-issue certificates.",
+        "pqc_mapping": "Revocation hygiene is important during crypto transitions.",
+        "confidence": "medium",
+        "confidence_reason": "Reachability is a best-effort HTTP probe and may vary by network path.",
+    },
+
     # OCSP stapling (keep it LOW, advisory)
     {
         "id": "OCSP_STAPLING_MISSING",
@@ -235,6 +377,41 @@ RULES: List[Dict[str, Any]] = [
         "pqc_mapping": "Stapling reduces revocation latency; helpful during cert rotations and PQC transition waves.",
         "confidence": "low",
         "confidence_reason": "Stapling visibility depends on client/TLS stack support; treat as advisory.",
+    },
+
+
+    {
+        "id": "OCSP_STATUS_REVOKED",
+        "title": "Stapled OCSP indicates certificate is revoked",
+        "severity": "critical",
+        "when": lambda f: bool(f.get("ocsp_stapled", False)) and (_ocsp_stapled_status(f) == "revoked"),
+        "evidence": lambda f: {
+            "ocsp_stapled": bool(f.get("ocsp_stapled", False)),
+            "ocsp_stapled_status": f.get("ocsp_stapled_status"),
+            "ocsp_response_status": f.get("ocsp_response_status"),
+            "ocsp_stapled_this_update": f.get("ocsp_stapled_this_update"),
+            "ocsp_stapled_next_update": f.get("ocsp_stapled_next_update"),
+        },
+        "remediation": "Replace the certificate immediately. Investigate CA revocation cause and ensure correct key handling and incident response.",
+        "pqc_mapping": "Operational certificate health is foundational for safe crypto transitions.",
+        "confidence": "high",
+        "confidence_reason": "Status is parsed from the stapled OCSP response (when present).",
+    },
+    {
+        "id": "OCSP_STAPLED_STALE",
+        "title": "Stapled OCSP response appears stale/expired",
+        "severity": "low",
+        "when": lambda f: bool(f.get("ocsp_stapled", False)) and bool(f.get("ocsp_stapled_is_stale", False)),
+        "evidence": lambda f: {
+            "ocsp_stapled_is_stale": bool(f.get("ocsp_stapled_is_stale", False)),
+            "ocsp_stapled_stale_by_days": f.get("ocsp_stapled_stale_by_days"),
+            "ocsp_stapled_this_update": f.get("ocsp_stapled_this_update"),
+            "ocsp_stapled_next_update": f.get("ocsp_stapled_next_update"),
+        },
+        "remediation": "Fix OCSP stapling refresh on the TLS terminator and ensure it can reach the OCSP responder. Verify system clock and stapling cache settings.",
+        "pqc_mapping": "Stapling reliability helps reduce revocation latency during certificate rotation waves.",
+        "confidence": "medium",
+        "confidence_reason": "Staleness is derived from the OCSP nextUpdate timestamp, when present.",
     },
 
     # PQC crypto posture
