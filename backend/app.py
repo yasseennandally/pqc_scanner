@@ -10,7 +10,7 @@ from collections import defaultdict, deque
 
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from scanner import scan_host, parse_target
@@ -32,6 +32,20 @@ from db import (
     get_asset,
     list_assets,
     list_tags,
+    # Sprint 5
+    upsert_collection,
+    list_collections,
+    get_collection,
+    delete_collection,
+    create_schedule,
+    list_schedules,
+    get_schedule,
+    update_schedule,
+    delete_schedule,
+    due_schedules,
+    mark_schedule_ran,
+    save_scan_asset_summaries,
+    get_asset_history,
 )
 
 
@@ -228,6 +242,92 @@ app.add_middleware(
 @app.on_event("startup")
 def _startup():
     init_db()
+
+
+# -----------------------------
+# Sprint 5: simple in-process scheduler
+# -----------------------------
+
+_SCHED_STOP = threading.Event()
+_SCHED_THREAD: Optional[threading.Thread] = None
+
+def _create_scan_and_start(targets: List[str], source: str = "manual", collection_id: Optional[int] = None) -> Dict[str, Any]:
+    # normalize and cap
+    targets = [t.strip() for t in (targets or []) if t and t.strip()]
+    if not targets:
+        raise HTTPException(status_code=400, detail="No targets provided.")
+    if len(targets) > MAX_TARGETS:
+        raise HTTPException(status_code=400, detail=f"Too many targets (max {MAX_TARGETS}).")
+    for t in targets:
+        if len(t) > MAX_TARGET_LEN:
+            raise HTTPException(status_code=400, detail=f"Invalid target: {t[:80]}")
+
+    scan_id = str(uuid.uuid4())
+    created_at = datetime.utcnow()
+    prog = _progress(len(targets), 0)
+
+    scan = {
+        "id": scan_id,
+        "status": "running",
+        "created_at": created_at,
+        "progress": prog,
+        "error": "",
+        "results": [],
+        "summary": {},
+        "meta": {"source": source, "collection_id": collection_id},
+    }
+    _cache_put(scan)
+
+    save_scan_row(
+        scan_id=scan_id,
+        status="running",
+        created_at=created_at,
+        progress=prog,
+        error_text="",
+        results=[],
+        summary={},
+    )
+
+    t = threading.Thread(target=_scan_worker, args=(scan_id, targets), daemon=True)
+    t.start()
+
+    return {"id": scan_id, "status": "running", "created_at": created_at.isoformat() + "Z"}
+
+
+def _scheduler_loop():
+    # Runs forever, triggers collection scans when due.
+    while not _SCHED_STOP.is_set():
+        try:
+            now = datetime.utcnow().isoformat() + "Z"
+            for sch in due_schedules(now):
+                # load targets from collection
+                col = get_collection(int(sch["collection_id"]))
+                targets_text = (col.get("targets_text") or "").strip()
+                targets = [ln.strip() for ln in targets_text.splitlines() if ln.strip()]
+
+                created = _create_scan_and_start(targets, source="schedule", collection_id=int(sch["collection_id"]))
+                mark_schedule_ran(int(sch["id"]), now, int(sch["interval_minutes"]), created["id"])
+        except Exception:
+            # swallow errors; scheduler should keep running
+            pass
+
+        _SCHED_STOP.wait(10.0)
+
+@app.on_event("startup")
+def _start_scheduler():
+    global _SCHED_THREAD
+    try:
+        if _SCHED_THREAD and _SCHED_THREAD.is_alive():
+            return
+        _SCHED_THREAD = threading.Thread(target=_scheduler_loop, daemon=True)
+        _SCHED_THREAD.start()
+    except Exception:
+        pass
+
+@app.on_event("shutdown")
+def _stop_scheduler():
+    _SCHED_STOP.set()
+
 
 
 @app.middleware("http")
@@ -456,6 +556,13 @@ def _scan_worker(scan_id: str, targets: List[str]) -> None:
         }
         _cache_put(final_scan)
         save_scan_results(scan_id, results=results, summary=summary, status="completed")
+        # Sprint 5: persist per-asset summaries for history
+        try:
+            ca = _cache_get(scan_id).get("created_at")
+            scanned_at_iso = ca.isoformat() + "Z" if hasattr(ca, "isoformat") else str(ca)
+            save_scan_asset_summaries(scan_id, scanned_at_iso=scanned_at_iso, results=results)
+        except Exception:
+            pass
         update_scan_progress(scan_id, status="completed", progress=prog, error_text="")
 
     except Exception as e:
@@ -701,6 +808,161 @@ def tls_migration_plan(scan_id: str):
 # -----------------------------
 # Sprint 4: Fix Next queue
 # -----------------------------
+
+
+
+# -----------------------------
+# Sprint 5: Collections
+# -----------------------------
+
+class CollectionUpsertRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    targets_text: str = Field(..., min_length=1, max_length=20000)
+
+@app.get("/collections")
+async def api_list_collections():
+    return {"items": list_collections()}
+
+@app.post("/collections")
+async def api_upsert_collection(req: CollectionUpsertRequest):
+    try:
+        c = upsert_collection(req.name, req.targets_text)
+        return c
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/collections/{collection_id}")
+async def api_get_collection(collection_id: int):
+    try:
+        return get_collection(collection_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+@app.delete("/collections/{collection_id}")
+async def api_delete_collection(collection_id: int):
+    try:
+        delete_collection(collection_id)
+        return {"ok": True}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="collection not found")
+
+@app.post("/collections/{collection_id}/scan")
+async def api_scan_collection(collection_id: int):
+    try:
+        col = get_collection(collection_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="collection not found")
+    targets_text = (col.get("targets_text") or "").strip()
+    targets = [ln.strip() for ln in targets_text.splitlines() if ln.strip()]
+    created = _create_scan_and_start(targets, source="collection", collection_id=collection_id)
+    return created
+
+# -----------------------------
+# Sprint 5: Scheduling
+# -----------------------------
+
+class ScheduleCreateRequest(BaseModel):
+    collection_id: int
+    interval_minutes: int = Field(..., ge=1, le=10080)  # up to 7 days
+    enabled: bool = True
+
+class ScheduleUpdateRequest(BaseModel):
+    interval_minutes: Optional[int] = Field(None, ge=1, le=10080)
+    enabled: Optional[bool] = None
+
+@app.get("/schedules")
+async def api_list_schedules():
+    return {"items": list_schedules()}
+
+@app.post("/schedules")
+async def api_create_schedule(req: ScheduleCreateRequest):
+    try:
+        return create_schedule(req.collection_id, req.interval_minutes, req.enabled)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/schedules/{schedule_id}")
+async def api_get_schedule(schedule_id: int):
+    try:
+        return get_schedule(schedule_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="schedule not found")
+
+@app.put("/schedules/{schedule_id}")
+async def api_update_schedule(schedule_id: int, req: ScheduleUpdateRequest):
+    try:
+        return update_schedule(schedule_id, req.interval_minutes, req.enabled)
+    except (KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.delete("/schedules/{schedule_id}")
+async def api_delete_schedule(schedule_id: int):
+    try:
+        delete_schedule(schedule_id)
+        return {"ok": True}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="schedule not found")
+
+@app.post("/schedules/{schedule_id}/run-now")
+async def api_schedule_run_now(schedule_id: int):
+    try:
+        sch = get_schedule(schedule_id)
+        col = get_collection(int(sch["collection_id"]))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="schedule/collection not found")
+    targets_text = (col.get("targets_text") or "").strip()
+    targets = [ln.strip() for ln in targets_text.splitlines() if ln.strip()]
+    created = _create_scan_and_start(targets, source="schedule-manual", collection_id=int(sch["collection_id"]))
+    # update schedule timestamps immediately
+    now = datetime.utcnow().isoformat() + "Z"
+    mark_schedule_ran(int(schedule_id), now, int(sch["interval_minutes"]), created["id"])
+    return created
+
+# -----------------------------
+# Sprint 5: Asset history
+# -----------------------------
+
+@app.get("/assets/{asset_key_str}/history")
+async def api_asset_history(asset_key_str: str, limit: int = Query(30, ge=1, le=200)):
+    try:
+        return {"asset_key": asset_key_str, "items": get_asset_history(asset_key_str, limit)}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# -----------------------------
+# Sprint 5: CSV export
+# -----------------------------
+
+def _csv_escape(v: Any) -> str:
+    s = "" if v is None else str(v)
+    if any(ch in s for ch in [",", "\n", "\r", '"']):
+        s = '"' + s.replace('"', '""') + '"'
+    return s
+
+@app.get("/scans/{scan_id}/export.csv")
+async def api_export_scan_csv(scan_id: str):
+    scan = load_scan_row(scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="scan not found")
+    rows = scan.get("results") or []
+    # minimal fields
+    cols = ["asset_key","risk_level","quantum_score","findings_count","tls_version","cipher","key_type","sig_algorithm"]
+    lines = [",".join(cols)]
+    for r in rows:
+        ak = asset_key(r.get("host",""), int(r.get("port",443)))
+        findings = r.get("findings") or []
+        lines.append(",".join([
+            _csv_escape(ak),
+            _csv_escape(r.get("risk") or r.get("risk_level")),
+            _csv_escape(r.get("quantum_risk_score") or r.get("quantum_score") or r.get("score")),
+            _csv_escape(len(findings) if isinstance(findings,list) else 0),
+            _csv_escape(r.get("tls_version")),
+            _csv_escape(r.get("cipher")),
+            _csv_escape(r.get("key_type")),
+            _csv_escape(r.get("sig_algorithm")),
+        ]))
+    csv_body = "\n".join(lines) + "\n"
+    return Response(content=csv_body, media_type="text/csv")
 
 @app.get("/fix-next")
 def api_fix_next(

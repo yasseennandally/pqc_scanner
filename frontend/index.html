@@ -248,6 +248,27 @@
     .fnFind{margin-top:10px;}
     .fnFind ul{margin:6px 0 0 18px; padding:0;}
     .fnFind li{margin:2px 0; font-size:12px;}
+  
+    .modalBackdrop{
+      position: fixed; inset: 0; background: rgba(2,6,23,.72);
+      display:none; align-items:center; justify-content:center;
+      z-index: 50;
+    }
+    .modalBox{
+      width: min(860px, 92vw);
+      max-height: 86vh;
+      overflow:auto;
+      background: rgba(15,23,42,.92);
+      border: 1px solid rgba(148,163,184,.20);
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: 0 14px 40px rgba(0,0,0,.45);
+    }
+    .modalHeader{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px;}
+    .modalTitle{font-weight:700;}
+    .modalGrid{display:grid; grid-template-columns: 1fr 1fr; gap:12px;}
+    .modalGrid .full{grid-column: 1 / -1;}
+    select, option{color: var(--text); background: rgba(2,6,23,.88);}
   </style>
 </head>
 <body>
@@ -274,6 +295,9 @@
         </div>
         <div class="tight">
           <button class="btn ghost" id="planBtn" disabled>Plan</button>
+        <button class="btn ghost" id="exportBtn" disabled>Export CSV</button>
+        <button class="btn ghost" id="collectionsBtn">Collections</button>
+        <button class="btn ghost" id="schedulesBtn">Schedules</button>
         <button class="btn ghost" id="fixNextBtn" disabled>Fix Next</button>
         </div>
       </div>
@@ -336,6 +360,91 @@ incomplete-chain.badssl.com</textarea>
       <div class="card">
         <div class="muted" style="font-size:11px;">JSON / Plan Output</div>
         <div id="jsonModal" style="display:none;"></div>
+        <!-- Collections Modal -->
+        <div class="modalBackdrop" id="collectionsBackdrop">
+          <div class="modalBox" onclick="event.stopPropagation()">
+            <div class="modalHeader">
+              <div class="modalTitle">Collections</div>
+              <button class="btn ghost" id="collectionsCloseBtn">Close</button>
+            </div>
+
+            <div class="modalGrid">
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Saved collections</div>
+                <div class="row">
+                  <div class="grow">
+                    <select id="coll_select" style="width:100%">
+                      <option value="">(none)</option>
+                    </select>
+                  </div>
+                  <div class="tight"><button class="btn ghost" id="coll_refresh">Refresh</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_load">Load</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_delete">Delete</button></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Name</div>
+                <input id="coll_name" placeholder="e.g., Tier-0 Prod Edge" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Actions</div>
+                <div class="row">
+                  <div class="tight"><button class="btn" id="coll_save">Save</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_apply">Apply to targets</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_scan">Scan</button></div>
+                </div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Targets (one per line)</div>
+                <textarea id="coll_targets" rows="10" placeholder="example.com&#10;api.example.com:443"></textarea>
+              </div>
+
+              <div class="full"><span class="muted mono" id="coll_msg"></span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Schedules Modal -->
+        <div class="modalBackdrop" id="schedulesBackdrop">
+          <div class="modalBox" onclick="event.stopPropagation()">
+            <div class="modalHeader">
+              <div class="modalTitle">Schedules</div>
+              <button class="btn ghost" id="schedulesCloseBtn">Close</button>
+            </div>
+
+            <div class="modalGrid">
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Collection</div>
+                <select id="sch_collection" style="width:100%">
+                  <option value="">(choose)</option>
+                </select>
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Interval (minutes)</div>
+                <input id="sch_interval" type="number" min="1" max="10080" value="60" />
+              </div>
+              <div>
+                <label class="muted" style="font-size:11px; display:flex; align-items:center; gap:8px;">
+                  <input type="checkbox" id="sch_enabled" checked style="width:14px; height:14px; margin:0;">
+                  Enabled
+                </label>
+              </div>
+              <div class="row" style="align-items:end;">
+                <div class="tight"><button class="btn" id="sch_create">Create</button></div>
+                <div class="tight"><button class="btn ghost" id="sch_refresh">Refresh</button></div>
+                <div class="tight"><span class="muted mono" id="sch_msg"></span></div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Existing schedules</div>
+                <div id="sch_table" class="mono" style="font-size:11px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div id="fixNextPanel" style="display:none; margin-top:12px;">
           <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
             <div style="font-weight:700;">Fix Next</div>
@@ -374,6 +483,7 @@ incomplete-chain.badssl.com</textarea>
           </div>
           <div class="row" style="margin-top:10px;">
             <div class="tight"><button class="btn ghost" id="ae_load">Load</button></div>
+            <div class="tight"><button class="btn ghost" id="ae_history">History</button></div>
             <div class="tight"><button class="btn" id="ae_save">Save</button></div>
             <div class="tight"><span class="muted mono" id="ae_msg"></span></div>
           </div>
@@ -488,6 +598,282 @@ function headers(){
       throw new Error(`HTTP ${res.status}: ${t || res.statusText}`);
     }
     return await res.json();
+  }
+
+  // Normalize API responses: accept [] or {items:[]}
+  function _asList(x){
+    if (!x) return [];
+    if (Array.isArray(x)) return x;
+    if (typeof x === "object"){
+      if (Array.isArray(x.items)) return x.items;
+      if (Array.isArray(x.data)) return x.data;
+      if (Array.isArray(x.results)) return x.results;
+    }
+    return [];
+  }
+
+  // -----------------------------
+  // Sprint 5: Collections (modal)
+  // -----------------------------
+  function openCollections(){
+    const b = document.getElementById("collectionsBackdrop");
+    if (!b) return;
+    b.style.display = "flex";
+    setStatus("Collections opened", "ok");
+    loadCollections();
+  }
+  function closeCollections(){
+    const b = document.getElementById("collectionsBackdrop");
+    if (!b) return;
+    b.style.display = "none";
+  }
+  function setCollMsg(msg){ const el=document.getElementById("coll_msg"); if(el) el.textContent=msg||""; }
+
+  async function loadCollections(){
+    try{
+      setCollMsg("Loading…");
+      const resp = await fetchJson("/collections");
+      const items = _asList(resp);
+      const sel = document.getElementById("coll_select");
+      if (sel){
+        sel.innerHTML = '<option value="">(none)</option>' + items.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+      }
+      // also populate schedules collection select
+      const schSel = document.getElementById("sch_collection");
+      if (schSel){
+        schSel.innerHTML = '<option value="">(choose)</option>' + items.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+      }
+      setCollMsg(`Loaded ${items.length} collection(s)`);
+    }catch(e){
+      setCollMsg(`Load failed: ${e.message}`);
+      setStatus(`Collections load failed`, "bad");
+    }
+  }
+
+  async function saveCollection(){
+    try{
+      const name = (document.getElementById("coll_name").value || "").trim();
+      const targets_text = (document.getElementById("coll_targets").value || "").trim();
+      if (!name) throw new Error("name is required");
+      if (!targets_text) throw new Error("targets are required");
+      setCollMsg("Saving…");
+      await fetchJson("/collections", { method:"POST", body: JSON.stringify({name, targets_text}) });
+      await loadCollections();
+      // select saved collection by name
+      const resp = await fetchJson("/collections");
+      const items = _asList(resp);
+      const saved = items.find(x=>x.name===name);
+      if (saved){
+        document.getElementById("coll_select").value = String(saved.id);
+      }
+      setCollMsg("Saved ✓");
+      setStatus("Collection saved", "ok");
+    }catch(e){
+      setCollMsg(`Save failed: ${e.message}`);
+      setStatus("Collection save failed", "bad");
+    }
+  }
+
+  async function loadSelectedCollectionIntoForm(){
+    try{
+      const id = document.getElementById("coll_select").value;
+      if (!id) throw new Error("select a collection");
+      setCollMsg("Loading…");
+      const c = await fetchJson(`/collections/${id}`);
+      document.getElementById("coll_name").value = c.name || "";
+      document.getElementById("coll_targets").value = c.targets_text || "";
+      setCollMsg("Loaded ✓");
+    }catch(e){
+      setCollMsg(`Load failed: ${e.message}`);
+    }
+  }
+
+  async function deleteSelectedCollection(){
+    try{
+      const id = document.getElementById("coll_select").value;
+      if (!id) throw new Error("select a collection");
+      if (!confirm("Delete this collection?")) return;
+      setCollMsg("Deleting…");
+      await fetchJson(`/collections/${id}`, { method:"DELETE" });
+      await loadCollections();
+      document.getElementById("coll_name").value = "";
+      document.getElementById("coll_targets").value = "";
+      setCollMsg("Deleted ✓");
+    }catch(e){
+      setCollMsg(`Delete failed: ${e.message}`);
+    }
+  }
+
+  function applyCollectionToTargets(){
+    const t = document.getElementById("coll_targets").value || "";
+    const ta = document.getElementById("targets");
+    if (ta){ ta.value = t; saveTargetsToStorage(); }
+    setCollMsg("Applied to targets ✓");
+  }
+
+  async function scanSelectedCollection(){
+    try{
+      const id = document.getElementById("coll_select").value;
+      const name = (document.getElementById("coll_name").value || "").trim();
+      const targets_text = (document.getElementById("coll_targets").value || "").trim();
+      // if not selected but name+targets provided, save first
+      let cid = id;
+      if (!cid){
+        if (!name || !targets_text) throw new Error("select a collection or fill name+targets then Save");
+        await saveCollection();
+        const resp = await fetchJson("/collections");
+        const items = _asList(resp);
+        const saved = items.find(x=>x.name===name);
+        if (!saved) throw new Error("could not resolve saved collection id");
+        cid = String(saved.id);
+      }
+      closeCollections();
+      setStatus("starting scan (collection)…", "warn");
+      const created = await fetchJson(`/collections/${cid}/scan`, { method:"POST" });
+      currentScanId = created.id;
+      saveLastScanId(currentScanId);
+      startPolling();
+      loadResults(true);
+    }catch(e){
+      setCollMsg(`Scan failed: ${e.message}`);
+      setStatus("Collection scan failed", "bad");
+    }
+  }
+
+  // -----------------------------
+  // Sprint 5: Schedules (modal)
+  // -----------------------------
+  function openSchedules(){
+    const b = document.getElementById("schedulesBackdrop");
+    if (!b) return;
+    b.style.display = "flex";
+    setStatus("Schedules opened", "ok");
+    loadCollections(); // populate collection select
+    loadSchedules();
+  }
+  function closeSchedules(){
+    const b = document.getElementById("schedulesBackdrop");
+    if (!b) return;
+    b.style.display = "none";
+  }
+  function setSchMsg(msg){ const el=document.getElementById("sch_msg"); if(el) el.textContent=msg||""; }
+
+  async function loadSchedules(){
+    try{
+      setSchMsg("Loading…");
+      const resp = await fetchJson("/schedules");
+      const items = _asList(resp);
+      const box = document.getElementById("sch_table");
+      if (box){
+        if (!items.length){
+          box.innerHTML = '<div class="muted">No schedules yet.</div>';
+        } else {
+          box.innerHTML = items.map(s=>{
+            const en = s.enabled ? "on" : "off";
+            return `<div style="padding:10px 0; border-top:1px solid rgba(148,163,184,.12);">
+              <div><b>${escapeHtml(s.collection_name || ("#"+s.collection_id))}</b> • every ${s.interval_minutes}m • <span class="pill ${s.enabled ? "ok":"warn"}">${en}</span></div>
+              <div class="muted" style="font-size:11px;">next: ${escapeHtml(s.next_run_at||"")} • last: ${escapeHtml(s.last_run_at||"")} • last_scan: ${escapeHtml(s.last_scan_id||"")}</div>
+              <div class="row" style="margin-top:6px;">
+                <div class="tight"><button class="btn ghost" onclick="runScheduleNow(${s.id})">Run now</button></div>
+                <div class="tight"><button class="btn ghost" onclick="toggleSchedule(${s.id}, ${s.enabled?0:1})">${s.enabled?"Disable":"Enable"}</button></div>
+                <div class="tight"><button class="btn ghost" onclick="deleteSchedule(${s.id})">Delete</button></div>
+              </div>
+            </div>`;
+          }).join("");
+        }
+      }
+      setSchMsg(`Loaded ${items.length} schedule(s)`);
+    }catch(e){
+      setSchMsg(`Load failed: ${e.message}`);
+      setStatus("Schedules load failed", "bad");
+    }
+  }
+
+  async function createScheduleFromForm(){
+    try{
+      const collection_id = parseInt(document.getElementById("sch_collection").value || "0", 10);
+      const interval_minutes = parseInt(document.getElementById("sch_interval").value || "0", 10);
+      const enabled = !!document.getElementById("sch_enabled").checked;
+      if (!collection_id) throw new Error("choose a collection");
+      if (!interval_minutes || interval_minutes < 1) throw new Error("interval must be >= 1");
+      setSchMsg("Creating…");
+      await fetchJson("/schedules", { method:"POST", body: JSON.stringify({collection_id, interval_minutes, enabled}) });
+      await loadSchedules();
+      setSchMsg("Created ✓");
+      setStatus("Schedule created", "ok");
+    }catch(e){
+      setSchMsg(`Create failed: ${e.message}`);
+      setStatus("Schedule create failed", "bad");
+    }
+  }
+
+  async function runScheduleNow(id){
+    try{
+      setSchMsg("Running…");
+      const created = await fetchJson(`/schedules/${id}/run-now`, { method:"POST" });
+      currentScanId = created.id;
+      saveLastScanId(currentScanId);
+      closeSchedules();
+      startPolling();
+      loadResults(true);
+      setStatus("running scheduled scan…", "warn");
+    }catch(e){
+      setSchMsg(`Run failed: ${e.message}`);
+      setStatus("Schedule run failed", "bad");
+    }
+  }
+
+  async function toggleSchedule(id, enabledInt){
+    try{
+      setSchMsg("Updating…");
+      await fetchJson(`/schedules/${id}`, { method:"PUT", body: JSON.stringify({enabled: enabledInt ? true : false}) });
+      await loadSchedules();
+      setSchMsg("Updated ✓");
+    }catch(e){
+      setSchMsg(`Update failed: ${e.message}`);
+    }
+  }
+
+  async function deleteSchedule(id){
+    try{
+      if (!confirm("Delete this schedule?")) return;
+      setSchMsg("Deleting…");
+      await fetchJson(`/schedules/${id}`, { method:"DELETE" });
+      await loadSchedules();
+      setSchMsg("Deleted ✓");
+    }catch(e){
+      setSchMsg(`Delete failed: ${e.message}`);
+    }
+  }
+  // expose for inline onclick in schedule rows
+  window.runScheduleNow = runScheduleNow;
+  window.toggleSchedule = toggleSchedule;
+  window.deleteSchedule = deleteSchedule;
+
+  // -----------------------------
+  // Sprint 5: Asset history + Export CSV
+  // -----------------------------
+  async function showAssetHistory(){
+    try{
+      const ak = (document.getElementById("ae_key").value || "").trim();
+      if (!ak) throw new Error("asset_key is empty");
+      const h = await fetchJson(`/assets/${encodeURIComponent(ak)}/history?limit=50`);
+      openJson(h, `History: ${ak}`);
+    }catch(e){
+      alert(`History error: ${e.message}`);
+    }
+  }
+
+  function exportCsv(){
+    if (!currentScanId){ alert("No scan loaded."); return; }
+    const url = API_BASE.replace(/\/$/, "") + `/scans/${encodeURIComponent(currentScanId)}/export.csv`;
+    // trigger download
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scan_${currentScanId}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   // --- Asset editor helpers ---
@@ -1301,6 +1687,10 @@ function headers(){
     });
 
     document.getElementById("startBtn").onclick = startScan;
+    document.getElementById("collectionsBtn").onclick = openCollections;
+    document.getElementById("schedulesBtn").onclick = openSchedules;
+    document.getElementById("exportBtn").onclick = exportCsv;
+
     const ta = document.getElementById("targets");
     if (ta){ ta.addEventListener("input", saveTargetsToStorage); }
 
@@ -1323,6 +1713,27 @@ function headers(){
     const aeSave = document.getElementById("ae_save");
     if (aeLoad) aeLoad.onclick = ()=> loadAssetIntoEditor((document.getElementById("ae_key").value||"").trim());
     if (aeSave) aeSave.onclick = saveEditorToAsset;
+    const histBtn = document.getElementById("ae_history");
+    if (histBtn) histBtn.onclick = showAssetHistory;
+
+    // Collections modal wiring
+    document.getElementById("collectionsBtn").onclick = openCollections;
+    document.getElementById("collectionsCloseBtn").onclick = closeCollections;
+    document.getElementById("collectionsBackdrop").addEventListener("click", closeCollections);
+    document.getElementById("coll_refresh").onclick = loadCollections;
+    document.getElementById("coll_save").onclick = saveCollection;
+    document.getElementById("coll_load").onclick = loadSelectedCollectionIntoForm;
+    document.getElementById("coll_apply").onclick = applyCollectionToTargets;
+    document.getElementById("coll_scan").onclick = scanSelectedCollection;
+    document.getElementById("coll_delete").onclick = deleteSelectedCollection;
+
+    // Schedules modal wiring
+    document.getElementById("schedulesBtn").onclick = openSchedules;
+    document.getElementById("schedulesCloseBtn").onclick = closeSchedules;
+    document.getElementById("schedulesBackdrop").addEventListener("click", closeSchedules);
+    document.getElementById("sch_refresh").onclick = loadSchedules;
+    document.getElementById("sch_create").onclick = createScheduleFromForm;
+
 
 
     // Hard reset UI on refresh (your earlier issue)
