@@ -237,6 +237,17 @@
     input[type=checkbox]{width:auto; padding:0; border-radius:4px;}
   
     .assetLink{cursor:pointer; text-decoration: underline dotted rgba(148,163,184,.35);}
+  
+    /* Sprint 4 Fix Next */
+    .fnGrid{display:grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap:10px; margin-top:10px;}
+    @media (max-width: 980px){ .fnGrid{grid-template-columns: 1fr;} }
+    .fnCard{border:1px solid var(--border); border-radius:14px; padding:10px; background: rgba(15,23,42,.55);}
+    .fnHead{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+    .fnAsset{font-family: var(--mono); font-size:12px;}
+    .fnMeta{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+    .fnFind{margin-top:10px;}
+    .fnFind ul{margin:6px 0 0 18px; padding:0;}
+    .fnFind li{margin:2px 0; font-size:12px;}
   </style>
 </head>
 <body>
@@ -263,6 +274,7 @@
         </div>
         <div class="tight">
           <button class="btn ghost" id="planBtn" disabled>Plan</button>
+        <button class="btn ghost" id="fixNextBtn" disabled>Fix Next</button>
         </div>
       </div>
     </div>
@@ -324,6 +336,21 @@ incomplete-chain.badssl.com</textarea>
       <div class="card">
         <div class="muted" style="font-size:11px;">JSON / Plan Output</div>
         <div id="jsonModal" style="display:none;"></div>
+        <div id="fixNextPanel" style="display:none; margin-top:12px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <div style="font-weight:700;">Fix Next</div>
+            <div class="row tight" style="gap:8px;">
+              <button class="btn ghost" id="fixNextRefreshBtn">Refresh</button>
+              <button class="btn ghost" id="fixNextCloseBtn">Close</button>
+            </div>
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:6px;">
+            Prioritized queue based on findings + asset criticality/tags (Sprint 4)
+          </div>
+          <div class="muted mono" id="fn_msg" style="margin-top:10px;"></div>
+          <div id="fn_out" style="margin-top:10px;"></div>
+        </div>
+
         <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
           <div class="muted" style="font-size:11px; margin-bottom:8px;">Asset editor</div>
           <div class="kvs" style="grid-template-columns: 150px 1fr;">
@@ -984,7 +1011,103 @@ function headers(){
     list.innerHTML = cards.join("") || `<div class="muted">No items for this filter.</div>`;
   }
 
-  // ---------- scanning ----------
+  
+  // ---------- Sprint 4: Fix Next ----------
+  let lastFixNext = null;
+
+  function setFixNextMessage(msg){
+    const el = document.getElementById("fn_msg");
+    if (el) el.textContent = msg || "";
+  }
+
+  function severityPill(sev){
+    const s = String(sev||"").toLowerCase();
+    if (s==="critical" || s==="high") return `<span class="pill bad">${escapeHtml(String(sev||"").toUpperCase())}</span>`;
+    if (s==="medium") return `<span class="pill warn">${escapeHtml(String(sev||"").toUpperCase())}</span>`;
+    if (s==="low") return `<span class="pill ok">${escapeHtml(String(sev||"").toUpperCase())}</span>`;
+    return `<span class="pill">${escapeHtml(String(sev||"").toUpperCase() || "INFO")}</span>`;
+  }
+
+  function renderFixNext(data){
+    const out = document.getElementById("fn_out");
+    if (!out) return;
+
+    const items = (data && data.items) ? data.items : [];
+    if (!items.length){
+      out.innerHTML = `<div class="muted">No actionable items returned. Try scanning endpoints with obvious issues (e.g., expired.badssl.com, incomplete-chain.badssl.com).</div>`;
+      return;
+    }
+
+    const cards = items.slice(0, 30).map(it=>{
+      const tags = Array.isArray(it.tags) ? it.tags : [];
+      const tf = Array.isArray(it.top_findings) ? it.top_findings : [];
+      const meta = [
+        it.owner ? `owner:${it.owner}` : "",
+        it.team ? `team:${it.team}` : "",
+        it.environment ? `env:${it.environment}` : "",
+        it.criticality ? `crit:${it.criticality}` : "",
+        tags.length ? `tags:${tags.join(",")}` : "",
+      ].filter(Boolean);
+
+      const findingList = tf.length ? `
+        <div class="fnFind">
+          <div class="muted" style="font-size:11px;">Top findings</div>
+          <ul>
+            ${tf.map(f=>`<li><span class="mono">${escapeHtml(f.id||"")}</span> ${severityPill(f.severity)}<div class="muted" style="margin-top:2px;">${escapeHtml(f.title||"")}</div>${f.remediation?`<div class="muted" style="margin-top:2px;">Fix: ${escapeHtml(f.remediation)}</div>`:""}</li>`).join("")}
+          </ul>
+        </div>` : `<div class="muted" style="margin-top:10px;">No findings in item.</div>`;
+
+      return `
+        <div class="fnCard">
+          <div class="fnHead">
+            <div class="fnAsset">${escapeHtml(it.asset_key || "")}</div>
+            <span class="pill">${escapeHtml(String(it.priority_score ?? ""))}</span>
+          </div>
+          <div class="fnMeta">
+            ${meta.map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join("")}
+          </div>
+          ${findingList}
+        </div>
+      `;
+    }).join("");
+
+    out.innerHTML = `<div class="fnGrid">${cards}</div>`;
+  }
+
+  async function loadFixNext(){
+    try{
+      const panel = document.getElementById("fixNextPanel");
+      if (!panel) return;
+
+      const sid = currentScanId ? String(currentScanId) : "";
+      setFixNextMessage("Loading…");
+      const q = sid ? `?scan_id=${encodeURIComponent(sid)}` : "";
+      const data = await fetchJson(`/fix-next${q}`);
+      lastFixNext = data;
+      setFixNextMessage(`Scan: ${escapeHtml(String(data.scan_id||sid||"latest"))} • Items: ${escapeHtml(String((data.items||[]).length))}`);
+      renderFixNext(data);
+    }catch(e){
+      setFixNextMessage(`Fix Next error: ${e.message}`);
+      const out = document.getElementById("fn_out");
+      if (out) out.innerHTML = `<div class="muted">Could not load Fix Next.</div>`;
+    }
+  }
+
+  function toggleFixNext(forceOpen=false){
+    const panel = document.getElementById("fixNextPanel");
+    if (!panel) return;
+    const open = forceOpen || (panel.style.display === "none" || panel.style.display === "");
+    if (open){
+      panel.style.display = "block";
+      const out = document.getElementById("fn_out");
+      if (out) out.innerHTML = `<div class="muted">Loading…</div>`;
+      loadFixNext();
+    } else {
+      panel.style.display = "none";
+    }
+  }
+
+// ---------- scanning ----------
   let currentScanId = null;
   let lastResults = null;
   let pollTimer = null;
@@ -1010,6 +1133,8 @@ function headers(){
       renderResults(rows);
       document.getElementById("jsonBtn").disabled = rows.length === 0;
       document.getElementById("planBtn").disabled = rows.length === 0;
+      const fx = document.getElementById("fixNextBtn");
+      if (fx) fx.disabled = rows.length === 0;
       setBaselineButtonsEnabled(rows.length !== 0);
     }catch(e){
       // during running, results may not yet exist: show status but don't break UI
@@ -1057,6 +1182,8 @@ function headers(){
     renderResults([]);
     setBaselineButtonsEnabled(false);
     document.getElementById("planBtn").disabled = true;
+    const fx = document.getElementById("fixNextBtn");
+    if (fx) fx.disabled = true;
     document.getElementById("jsonBtn").disabled = true;
     setProgress({total:0, done:0, percent:0});
     setStatus("starting");
@@ -1180,6 +1307,12 @@ function headers(){
     document.getElementById("loadLastBtn").onclick = loadLastScan;
     document.getElementById("jsonBtn").onclick = viewJson;
     document.getElementById("planBtn").onclick = viewPlan;
+    const fxBtn = document.getElementById("fixNextBtn");
+    if (fxBtn) fxBtn.onclick = ()=> toggleFixNext(true);
+    const fxRef = document.getElementById("fixNextRefreshBtn");
+    if (fxRef) fxRef.onclick = loadFixNext;
+    const fxClose = document.getElementById("fixNextCloseBtn");
+    if (fxClose) fxClose.onclick = ()=> toggleFixNext(false);
     document.getElementById("baselineBtn").onclick = setBaseline;
     document.getElementById("diffBtn").onclick = diffVsBaseline;
     wireDiffPanelButtons();
