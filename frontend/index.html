@@ -526,7 +526,7 @@ incomplete-chain.badssl.com</textarea>
 
 <script>
   
-  // Safe DOM helpers (prevent init crashes if elements are missing)
+  // Safe DOM helpers (avoid crashes if optional elements are missing)
   function $(id){ return document.getElementById(id); }
   function click(id, fn){ const el = $(id); if (el) el.onclick = fn; }
   function on(id, ev, fn){ const el = $(id); if (el) el.addEventListener(ev, fn); }
@@ -1672,7 +1672,7 @@ function headers(){
     }
   }
 
- function wireDiffPanelButtons(){
+  function wireDiffPanelButtons(){
   click("filterAllBtn", () => {
     diffFilterMode = "all";
     renderDiffPanel();
@@ -1728,10 +1728,10 @@ function headers(){
       document.getElementById("apiBaseLabel").textContent = API_BASE;
     });
 
-    { const el = document.getElementById("startBtn"); if (el) el.onclick = startScan; }
-    { const el = document.getElementById("collectionsBtn"); if (el) el.onclick = openCollections; }
-    { const el = document.getElementById("schedulesBtn"); if (el) el.onclick = openSchedules; }
-    { const el = document.getElementById("exportBtn"); if (el) el.onclick = exportCsv; }
+    click("startBtn", startScan);
+    click("collectionsBtn", openCollections);
+    click("schedulesBtn", openSchedules);
+    click("exportBtn", exportCsv);
     const dashBtn = document.getElementById("dashBtn");
     if (dashBtn) dashBtn.onclick = openDashboard;
 
@@ -1739,17 +1739,17 @@ function headers(){
     const ta = document.getElementById("targets");
     if (ta){ ta.addEventListener("input", saveTargetsToStorage); }
 
-    { const el = document.getElementById("loadLastBtn"); if (el) el.onclick = loadLastScan; }
-    { const el = document.getElementById("jsonBtn"); if (el) el.onclick = viewJson; }
-    { const el = document.getElementById("planBtn"); if (el) el.onclick = viewPlan; }
+    click("loadLastBtn", loadLastScan);
+    click("jsonBtn", viewJson);
+    click("planBtn", viewPlan);
     const fxBtn = document.getElementById("fixNextBtn");
     if (fxBtn) fxBtn.onclick = ()=> toggleFixNext(true);
     const fxRef = document.getElementById("fixNextRefreshBtn");
     if (fxRef) fxRef.onclick = loadFixNext;
     const fxClose = document.getElementById("fixNextCloseBtn");
     if (fxClose) fxClose.onclick = ()=> toggleFixNext(false);
-    { const el = document.getElementById("baselineBtn"); if (el) el.onclick = setBaseline; }
-    { const el = document.getElementById("diffBtn"); if (el) el.onclick = diffVsBaseline; }
+    click("baselineBtn", setBaseline);
+    click("diffBtn", diffVsBaseline);
     wireDiffPanelButtons();
     renderBaselineIndicator();
 
@@ -1762,22 +1762,22 @@ function headers(){
     if (histBtn) histBtn.onclick = showAssetHistory;
 
     // Collections modal wiring
-    { const el = document.getElementById("collectionsBtn"); if (el) el.onclick = openCollections; }
-    { const el = document.getElementById("collectionsCloseBtn"); if (el) el.onclick = closeCollections; }
-    { const el = document.getElementById("collectionsBackdrop"); if (el) el.addEventListener("click", closeCollections); }
-    { const el = document.getElementById("coll_refresh"); if (el) el.onclick = loadCollections; }
-    { const el = document.getElementById("coll_save"); if (el) el.onclick = saveCollection; }
-    { const el = document.getElementById("coll_load"); if (el) el.onclick = loadSelectedCollectionIntoForm; }
-    { const el = document.getElementById("coll_apply"); if (el) el.onclick = applyCollectionToTargets; }
-    { const el = document.getElementById("coll_scan"); if (el) el.onclick = scanSelectedCollection; }
-    { const el = document.getElementById("coll_delete"); if (el) el.onclick = deleteSelectedCollection; }
+    click("collectionsBtn", openCollections);
+    click("collectionsCloseBtn", closeCollections);
+    on("collectionsBackdrop", "click", closeCollections);
+    click("coll_refresh", loadCollections);
+    click("coll_save", saveCollection);
+    click("coll_load", loadSelectedCollectionIntoForm);
+    click("coll_apply", applyCollectionToTargets);
+    click("coll_scan", scanSelectedCollection);
+    click("coll_delete", deleteSelectedCollection);
 
     // Schedules modal wiring
-    { const el = document.getElementById("schedulesBtn"); if (el) el.onclick = openSchedules; }
-    { const el = document.getElementById("schedulesCloseBtn"); if (el) el.onclick = closeSchedules; }
-    { const el = document.getElementById("schedulesBackdrop"); if (el) el.addEventListener("click", closeSchedules); }
-    { const el = document.getElementById("sch_refresh"); if (el) el.onclick = loadSchedules; }
-    { const el = document.getElementById("sch_create"); if (el) el.onclick = createScheduleFromForm; }
+    click("schedulesBtn", openSchedules);
+    click("schedulesCloseBtn", closeSchedules);
+    on("schedulesBackdrop", "click", closeSchedules);
+    click("sch_refresh", loadSchedules);
+    click("sch_create", createScheduleFromForm);
 
     
 
@@ -1788,6 +1788,7 @@ function headers(){
         setStatus("loading latest scan…", "warn");
         await loadLastScan();
       }
+
     // wireCloseButtonsSprint6
     try{
       const cb = document.getElementById("collectionsBackdrop");
@@ -1941,6 +1942,11 @@ function headers(){
       const days = parseInt(document.getElementById("trend_days").value || "30", 10);
       const qs = new URLSearchParams({group_by, metric, days: String(days)});
       const data = await fetchJson(`/metrics/trends?` + qs.toString());
+      if (data && data.error){
+        setDashMsg(`Trend error: ${data.error}`);
+        alert(`Trend error: ${data.error}`);
+        return;
+      }
       const pts = data.points || [];
       const top = data.top_groups || [];
 
@@ -1954,15 +1960,19 @@ function headers(){
       const byDay = {};
       for (const p of pts){
         if (!byDay[p.day]) byDay[p.day] = {};
-        byDay[p.day][p.group] = p.value;
+        byDay[p.day][p.group] = { value: p.value, n: (p.n ?? p.count ?? p.sample_size ?? null) };
       }
       const daysSorted = Object.keys(byDay).sort();
       const header = `<tr><th>day</th>${top.map(g=>`<th>${escapeHtml(g)}</th>`).join("")}</tr>`;
       const rows = daysSorted.slice(-60).map(d=>{
         const row = byDay[d] || {};
         const tds = top.map(g=>{
-          const v = row[g];
-          const s = (v===undefined) ? "" : (typeof v === "number" ? v.toFixed(2) : String(v));
+          const cell = row[g];
+          if (cell === undefined || cell === null) return `<td></td>`;
+          const v = (typeof cell === "object") ? cell.value : cell;
+          const n = (typeof cell === "object") ? cell.n : null;
+          let s = (typeof v === "number") ? v.toFixed(2) : String(v);
+          if (n !== undefined && n !== null) s += ` (n=${n})`;
           return `<td>${escapeHtml(s)}</td>`;
         }).join("");
         return `<tr><td>${escapeHtml(d)}</td>${tds}</tr>`;
@@ -2036,10 +2046,8 @@ function headers(){
   try{ window.closeSchedules = closeSchedules; }catch(e){}
   try{ window.closeDashboard = closeDashboard; }catch(e){}
 
-
-// Expose for inline handlers
-window.loadDashboardTrend = loadDashboardTrend;
-window.loadDashboardOverview = loadDashboardOverview;
+  // expose trend loader for inline onclick
+  try{ window.loadDashboardTrend = loadDashboardTrend; }catch(e){}
 </script>
 
         <!-- Dashboard Modal -->
