@@ -296,6 +296,7 @@
         <div class="tight">
           <button class="btn ghost" id="planBtn" disabled>Plan</button>
         <button class="btn ghost" id="exportBtn" disabled>Export CSV</button>
+        <button class="btn ghost" id="dashBtn">Dashboard</button>
         <button class="btn ghost" id="collectionsBtn">Collections</button>
         <button class="btn ghost" id="schedulesBtn">Schedules</button>
         <button class="btn ghost" id="fixNextBtn" disabled>Fix Next</button>
@@ -361,11 +362,11 @@ incomplete-chain.badssl.com</textarea>
         <div class="muted" style="font-size:11px;">JSON / Plan Output</div>
         <div id="jsonModal" style="display:none;"></div>
         <!-- Collections Modal -->
-        <div class="modalBackdrop" id="collectionsBackdrop">
+        <div class="modalBackdrop" id="collectionsBackdrop" onclick="closeCollections()">
           <div class="modalBox" onclick="event.stopPropagation()">
             <div class="modalHeader">
               <div class="modalTitle">Collections</div>
-              <button class="btn ghost" id="collectionsCloseBtn">Close</button>
+              <button class="btn ghost" id="collectionsCloseBtn" type="button" onclick="closeCollections()">Close</button>
             </div>
 
             <div class="modalGrid">
@@ -407,11 +408,11 @@ incomplete-chain.badssl.com</textarea>
         </div>
 
         <!-- Schedules Modal -->
-        <div class="modalBackdrop" id="schedulesBackdrop">
+        <div class="modalBackdrop" id="schedulesBackdrop" onclick="closeSchedules()">
           <div class="modalBox" onclick="event.stopPropagation()">
             <div class="modalHeader">
               <div class="modalTitle">Schedules</div>
-              <button class="btn ghost" id="schedulesCloseBtn">Close</button>
+              <button class="btn ghost" id="schedulesCloseBtn" type="button" onclick="closeSchedules()">Close</button>
             </div>
 
             <div class="modalGrid">
@@ -524,7 +525,13 @@ incomplete-chain.badssl.com</textarea>
   </div>
 
 <script>
-  // ---------- helpers ----------
+  
+  // Safe DOM helpers (prevent init crashes if elements are missing)
+  function $(id){ return document.getElementById(id); }
+  function click(id, fn){ const el = $(id); if (el) el.onclick = fn; }
+  function on(id, ev, fn){ const el = $(id); if (el) el.addEventListener(ev, fn); }
+
+// ---------- helpers ----------
   function escapeHtml(s){
     return String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
   }
@@ -1519,6 +1526,8 @@ function headers(){
       renderResults(rows);
       document.getElementById("jsonBtn").disabled = rows.length === 0;
       document.getElementById("planBtn").disabled = rows.length === 0;
+      const db = document.getElementById("dashBtn");
+      if (db) db.disabled = rows.length === 0;
       const fx = document.getElementById("fixNextBtn");
       if (fx) fx.disabled = rows.length === 0;
       setBaselineButtonsEnabled(rows.length !== 0);
@@ -1663,16 +1672,49 @@ function headers(){
     }
   }
 
-  function wireDiffPanelButtons(){
-    document.getElementById("filterAllBtn").onclick = ()=>{ diffFilterMode="all"; renderDiffPanel(); renderResults(lastResults?.results || []); };
-    document.getElementById("filterRegBtn").onclick = ()=>{ diffFilterMode="reg"; renderDiffPanel(); renderResults((lastResults?.results || []).filter(r => r.__diff && !r.__diff.no_baseline && r.__diff.new_count>0)); };
-    document.getElementById("filterImpBtn").onclick = ()=>{ diffFilterMode="imp"; renderDiffPanel(); renderResults((lastResults?.results || []).filter(r => r.__diff && !r.__diff.no_baseline && r.__diff.resolved_count>0)); };
-    document.getElementById("clearDiffBtn").onclick = ()=>{ lastDiff=null; diffFilterMode="all"; renderDiffPanel(); applyDiffBadges(); renderResults(lastResults?.results || []); closeJson(); };
-  }
+ function wireDiffPanelButtons(){
+  click("filterAllBtn", () => {
+    diffFilterMode = "all";
+    renderDiffPanel();
+    renderResults(lastResults?.results || []);
+  });
+
+  click("filterRegBtn", () => {
+    diffFilterMode = "reg";
+    renderDiffPanel();
+    renderResults(
+      (lastResults?.results || []).filter(r =>
+        r.__diff && !r.__diff.no_baseline && r.__diff.new_count > 0
+      )
+    );
+  });
+
+  click("filterImpBtn", () => {
+    diffFilterMode = "imp";
+    renderDiffPanel();
+    renderResults(
+      (lastResults?.results || []).filter(r =>
+        r.__diff && !r.__diff.no_baseline && r.__diff.resolved_count > 0
+      )
+    );
+  });
+
+  click("clearDiffBtn", () => {
+    lastDiff = null;
+    diffFilterMode = "all";
+    renderDiffPanel();
+    applyDiffBadges();
+    renderResults(lastResults?.results || []);
+    closeJson();
+  });
+}
+
 
   function init(){
     document.getElementById("apiBase").value = API_BASE;
     document.getElementById("apiBaseLabel").textContent = API_BASE;
+    const d = document.getElementById("dashBtn");
+    if (d) d.disabled = false;
 
     // Restore targets + autoload preference
     loadTargetsFromStorage();
@@ -1686,25 +1728,28 @@ function headers(){
       document.getElementById("apiBaseLabel").textContent = API_BASE;
     });
 
-    document.getElementById("startBtn").onclick = startScan;
-    document.getElementById("collectionsBtn").onclick = openCollections;
-    document.getElementById("schedulesBtn").onclick = openSchedules;
-    document.getElementById("exportBtn").onclick = exportCsv;
+    { const el = document.getElementById("startBtn"); if (el) el.onclick = startScan; }
+    { const el = document.getElementById("collectionsBtn"); if (el) el.onclick = openCollections; }
+    { const el = document.getElementById("schedulesBtn"); if (el) el.onclick = openSchedules; }
+    { const el = document.getElementById("exportBtn"); if (el) el.onclick = exportCsv; }
+    const dashBtn = document.getElementById("dashBtn");
+    if (dashBtn) dashBtn.onclick = openDashboard;
+
 
     const ta = document.getElementById("targets");
     if (ta){ ta.addEventListener("input", saveTargetsToStorage); }
 
-    document.getElementById("loadLastBtn").onclick = loadLastScan;
-    document.getElementById("jsonBtn").onclick = viewJson;
-    document.getElementById("planBtn").onclick = viewPlan;
+    { const el = document.getElementById("loadLastBtn"); if (el) el.onclick = loadLastScan; }
+    { const el = document.getElementById("jsonBtn"); if (el) el.onclick = viewJson; }
+    { const el = document.getElementById("planBtn"); if (el) el.onclick = viewPlan; }
     const fxBtn = document.getElementById("fixNextBtn");
     if (fxBtn) fxBtn.onclick = ()=> toggleFixNext(true);
     const fxRef = document.getElementById("fixNextRefreshBtn");
     if (fxRef) fxRef.onclick = loadFixNext;
     const fxClose = document.getElementById("fixNextCloseBtn");
     if (fxClose) fxClose.onclick = ()=> toggleFixNext(false);
-    document.getElementById("baselineBtn").onclick = setBaseline;
-    document.getElementById("diffBtn").onclick = diffVsBaseline;
+    { const el = document.getElementById("baselineBtn"); if (el) el.onclick = setBaseline; }
+    { const el = document.getElementById("diffBtn"); if (el) el.onclick = diffVsBaseline; }
     wireDiffPanelButtons();
     renderBaselineIndicator();
 
@@ -1717,22 +1762,71 @@ function headers(){
     if (histBtn) histBtn.onclick = showAssetHistory;
 
     // Collections modal wiring
-    document.getElementById("collectionsBtn").onclick = openCollections;
-    document.getElementById("collectionsCloseBtn").onclick = closeCollections;
-    document.getElementById("collectionsBackdrop").addEventListener("click", closeCollections);
-    document.getElementById("coll_refresh").onclick = loadCollections;
-    document.getElementById("coll_save").onclick = saveCollection;
-    document.getElementById("coll_load").onclick = loadSelectedCollectionIntoForm;
-    document.getElementById("coll_apply").onclick = applyCollectionToTargets;
-    document.getElementById("coll_scan").onclick = scanSelectedCollection;
-    document.getElementById("coll_delete").onclick = deleteSelectedCollection;
+    { const el = document.getElementById("collectionsBtn"); if (el) el.onclick = openCollections; }
+    { const el = document.getElementById("collectionsCloseBtn"); if (el) el.onclick = closeCollections; }
+    { const el = document.getElementById("collectionsBackdrop"); if (el) el.addEventListener("click", closeCollections); }
+    { const el = document.getElementById("coll_refresh"); if (el) el.onclick = loadCollections; }
+    { const el = document.getElementById("coll_save"); if (el) el.onclick = saveCollection; }
+    { const el = document.getElementById("coll_load"); if (el) el.onclick = loadSelectedCollectionIntoForm; }
+    { const el = document.getElementById("coll_apply"); if (el) el.onclick = applyCollectionToTargets; }
+    { const el = document.getElementById("coll_scan"); if (el) el.onclick = scanSelectedCollection; }
+    { const el = document.getElementById("coll_delete"); if (el) el.onclick = deleteSelectedCollection; }
 
     // Schedules modal wiring
-    document.getElementById("schedulesBtn").onclick = openSchedules;
-    document.getElementById("schedulesCloseBtn").onclick = closeSchedules;
-    document.getElementById("schedulesBackdrop").addEventListener("click", closeSchedules);
-    document.getElementById("sch_refresh").onclick = loadSchedules;
-    document.getElementById("sch_create").onclick = createScheduleFromForm;
+    { const el = document.getElementById("schedulesBtn"); if (el) el.onclick = openSchedules; }
+    { const el = document.getElementById("schedulesCloseBtn"); if (el) el.onclick = closeSchedules; }
+    { const el = document.getElementById("schedulesBackdrop"); if (el) el.addEventListener("click", closeSchedules); }
+    { const el = document.getElementById("sch_refresh"); if (el) el.onclick = loadSchedules; }
+    { const el = document.getElementById("sch_create"); if (el) el.onclick = createScheduleFromForm; }
+
+    
+
+  async function openDashboardSafe(){
+    try{
+      // If no scan loaded (refresh, scheduled runs), load latest scan automatically
+      if (!currentScanId){
+        setStatus("loading latest scan…", "warn");
+        await loadLastScan();
+      }
+    // wireCloseButtonsSprint6
+    try{
+      const cb = document.getElementById("collectionsBackdrop");
+      const sb = document.getElementById("schedulesBackdrop");
+      const db = document.getElementById("dashBackdrop");
+
+      const cClose = document.getElementById("collectionsCloseBtn");
+      const sClose = document.getElementById("schedulesCloseBtn");
+      const dClose = document.getElementById("dashCloseBtn");
+
+      if (cClose) cClose.onclick = closeCollections;
+      if (sClose) sClose.onclick = closeSchedules;
+      if (dClose) dClose.onclick = closeDashboard;
+
+      if (cb) cb.addEventListener("click", closeCollections);
+      if (sb) sb.addEventListener("click", closeSchedules);
+      if (db) db.addEventListener("click", closeDashboard);
+    }catch(e){
+      console.warn("close wiring failed", e);
+    }
+
+      // Ensure results are loaded so the dashboard has data
+      await loadResults(true);
+      await openDashboard();
+    }catch(e){
+      alert(`Dashboard error: ${e.message}`);
+      setStatus("dashboard error", "bad");
+    }
+  }
+
+// Dashboard modal wiring
+    click("dashCloseBtn", closeDashboard);
+    on("dashBackdrop", "click", closeDashboard);
+    click("dash_refresh", loadDashboardOverview);
+    click("trend_refresh", loadDashboardTrend);
+    click("dash_save_view", saveDashView);
+    click("dash_load_view", loadDashView);
+    click("dash_delete_view", deleteDashView);
+
 
 
 
@@ -1758,6 +1852,270 @@ function headers(){
   }
 
   init();
+
+
+  // -----------------------------
+  // Sprint 6: Dashboard (overview + trends)
+  // -----------------------------
+  const LS_DASH_VIEWS_KEY = "pqc_dash_views_v1";
+
+  function setDashMsg(msg){ const el=document.getElementById("dash_msg"); if(el) el.textContent=msg||""; }
+
+  function openDashboard(){
+    if (!currentScanId){
+      alert("Run or load a scan first.");
+      return;
+    }
+    const b = document.getElementById("dashBackdrop");
+    if (!b) return;
+    b.style.display = "flex";
+    setStatus("Dashboard opened", "ok");
+    refreshDashViews();
+    loadDashboardOverview();
+  }
+  function closeDashboard(){
+    const b = document.getElementById("dashBackdrop");
+    if (!b) return;
+    b.style.display = "none";
+  }
+
+  function dashFilters(){
+    return {
+      owner: (document.getElementById("dash_owner").value || "").trim(),
+      team: (document.getElementById("dash_team").value || "").trim(),
+      environment: (document.getElementById("dash_env").value || "").trim(),
+      criticality: (document.getElementById("dash_crit").value || "").trim(),
+    };
+  }
+
+  async function loadDashboardOverview(){
+    try{
+      if (!currentScanId) return;
+      setDashMsg("Loading overview…");
+      const f = dashFilters();
+      const qs = new URLSearchParams(f);
+      const data = await fetchJson(`/metrics/scan/${encodeURIComponent(currentScanId)}/overview?` + qs.toString());
+      const c = data.counts || {};
+      const top = data.top_assets || [];
+
+      const lines = [];
+      lines.push(`<div><b>Assets:</b> ${c.assets_total ?? 0} • <b>With findings:</b> ${c.assets_with_findings ?? 0}</div>`);
+
+      function kv(obj){
+        const entries = Object.entries(obj || {});
+        if (!entries.length) return "<span class='muted'>—</span>";
+        return entries.map(([k,v])=>`<span class="pill">${escapeHtml(k)}: ${v}</span>`).join(" ");
+      }
+      lines.push(`<div style="margin-top:8px;"><b>Risk:</b> ${kv(c.risk_levels)}</div>`);
+      lines.push(`<div style="margin-top:8px;"><b>PQC relevance:</b> ${kv(c.pqc_relevance)}</div>`);
+      lines.push(`<div style="margin-top:8px;"><b>TLS versions:</b> ${kv(c.tls_versions)}</div>`);
+      lines.push(`<div style="margin-top:8px;"><b>Key types:</b> ${kv(c.key_types)}</div>`);
+
+      lines.push(`<div style="margin-top:10px;"><b>Top assets</b></div>`);
+      if (!top.length){
+        lines.push(`<div class="muted">No assets found for this filter.</div>`);
+      } else {
+        lines.push(`<div style="overflow:auto; border:1px solid rgba(148,163,184,.12); border-radius:12px; padding:10px; margin-top:6px;">
+          ${top.slice(0,20).map(a=>{
+            return `<div style="padding:6px 0; border-top:1px solid rgba(148,163,184,.10);">
+              <div><b>${escapeHtml(a.asset_key||"")}</b> • score ${Number(a.quantum_score||0).toFixed(1)} • findings ${a.findings_count||0} • <span class="pill">${escapeHtml(a.risk_level||"")}</span></div>
+              <div class="muted" style="font-size:11px;">${escapeHtml(a.owner||"(unassigned)")} • ${escapeHtml(a.team||"(unassigned)")} • ${escapeHtml(a.environment||"(unassigned)")} • ${escapeHtml(a.criticality||"(unassigned)")}</div>
+            </div>`;
+          }).join("")}
+        </div>`);
+      }
+
+      document.getElementById("dash_overview").innerHTML = lines.join("");
+      setDashMsg("Overview loaded ✓");
+    }catch(e){
+      setDashMsg(`Overview failed: ${e.message}`);
+      alert(`Dashboard overview error: ${e.message}`);
+    }
+  }
+
+  async function loadDashboardTrend(){
+    try{
+      setDashMsg("Loading trend…");
+      const group_by = document.getElementById("trend_group").value;
+      const metric = document.getElementById("trend_metric").value;
+      const days = parseInt(document.getElementById("trend_days").value || "30", 10);
+      const qs = new URLSearchParams({group_by, metric, days: String(days)});
+      const data = await fetchJson(`/metrics/trends?` + qs.toString());
+      const pts = data.points || [];
+      const top = data.top_groups || [];
+
+      if (!pts.length){
+        document.getElementById("dash_trend").innerHTML = `<div class="muted">No trend data yet. Run scheduled scans to build history.</div>`;
+        setDashMsg("Trend loaded ✓");
+        return;
+      }
+
+      // render as a compact table: day rows; for each group show value
+      const byDay = {};
+      for (const p of pts){
+        if (!byDay[p.day]) byDay[p.day] = {};
+        byDay[p.day][p.group] = p.value;
+      }
+      const daysSorted = Object.keys(byDay).sort();
+      const header = `<tr><th>day</th>${top.map(g=>`<th>${escapeHtml(g)}</th>`).join("")}</tr>`;
+      const rows = daysSorted.slice(-60).map(d=>{
+        const row = byDay[d] || {};
+        const tds = top.map(g=>{
+          const v = row[g];
+          const s = (v===undefined) ? "" : (typeof v === "number" ? v.toFixed(2) : String(v));
+          return `<td>${escapeHtml(s)}</td>`;
+        }).join("");
+        return `<tr><td>${escapeHtml(d)}</td>${tds}</tr>`;
+      }).join("");
+      document.getElementById("dash_trend").innerHTML = `<div style="overflow:auto; border:1px solid rgba(148,163,184,.12); border-radius:12px; padding:10px;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          ${header}${rows}
+        </table>
+      </div>`;
+      setDashMsg("Trend loaded ✓");
+    }catch(e){
+      setDashMsg(`Trend failed: ${e.message}`);
+      alert(`Trend error: ${e.message}`);
+    }
+  }
+
+  function _loadDashViewsRaw(){
+    try{
+      const raw = localStorage.getItem(LS_DASH_VIEWS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }catch(_e){ return []; }
+  }
+  function _saveDashViewsRaw(arr){
+    try{ localStorage.setItem(LS_DASH_VIEWS_KEY, JSON.stringify(arr||[])); }catch(_e){}
+  }
+  function refreshDashViews(){
+    const arr = _loadDashViewsRaw();
+    const sel = document.getElementById("dash_views");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">(saved views)</option>' + arr.map((v,i)=>`<option value="${i}">${escapeHtml(v.name)}</option>`).join("");
+  }
+  function saveDashView(){
+    const name = prompt("View name?");
+    if (!name) return;
+    const arr = _loadDashViewsRaw();
+    arr.push({name, filters: dashFilters()});
+    _saveDashViewsRaw(arr);
+    refreshDashViews();
+    setDashMsg("View saved ✓");
+  }
+  function loadDashView(){
+    const sel = document.getElementById("dash_views");
+    if (!sel || !sel.value) return;
+    const i = parseInt(sel.value, 10);
+    const arr = _loadDashViewsRaw();
+    const v = arr[i];
+    if (!v) return;
+    document.getElementById("dash_owner").value = v.filters.owner || "";
+    document.getElementById("dash_team").value = v.filters.team || "";
+    document.getElementById("dash_env").value = v.filters.environment || "";
+    document.getElementById("dash_crit").value = v.filters.criticality || "";
+    setDashMsg("View loaded ✓");
+    loadDashboardOverview();
+  }
+  function deleteDashView(){
+    const sel = document.getElementById("dash_views");
+    if (!sel || !sel.value) return;
+    const i = parseInt(sel.value, 10);
+    const arr = _loadDashViewsRaw();
+    const v = arr[i];
+    if (!v) return;
+    if (!confirm(`Delete view '${v.name}'?`)) return;
+    arr.splice(i,1);
+    _saveDashViewsRaw(arr);
+    refreshDashViews();
+    setDashMsg("View deleted ✓");
+  }
+
+  // expose close fns for safety
+  try{ window.closeCollections = closeCollections; }catch(e){}
+  try{ window.closeSchedules = closeSchedules; }catch(e){}
+  try{ window.closeDashboard = closeDashboard; }catch(e){}
+
+
+// Expose for inline handlers
+window.loadDashboardTrend = loadDashboardTrend;
+window.loadDashboardOverview = loadDashboardOverview;
 </script>
+
+        <!-- Dashboard Modal -->
+        <div class="modalBackdrop" id="dashBackdrop" onclick="closeDashboard()">
+          <div class="modalBox" onclick="event.stopPropagation()">
+            <div class="modalHeader">
+              <div class="modalTitle">Dashboard</div>
+              <button class="btn ghost" id="dashCloseBtn" type="button" onclick="closeDashboard()">Close</button>
+            </div>
+
+            <div class="modalGrid">
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Owner</div>
+                <input id="dash_owner" placeholder="(optional)" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Team</div>
+                <input id="dash_team" placeholder="(optional)" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Environment</div>
+                <input id="dash_env" placeholder="(optional)" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Criticality</div>
+                <select id="dash_crit" style="width:100%">
+                  <option value="">(any)</option>
+                  <option value="tier-0">tier-0</option>
+                  <option value="tier-1">tier-1</option>
+                  <option value="tier-2">tier-2</option>
+                  <option value="tier-3">tier-3</option>
+                </select>
+              </div>
+
+              <div class="row full" style="justify-content:flex-start; gap:10px;">
+                <div class="tight"><button class="btn" id="dash_refresh">Refresh</button></div>
+                <div class="tight"><button class="btn ghost" id="dash_save_view">Save view</button></div>
+                <div class="tight"><select id="dash_views" style="width:220px"><option value="">(saved views)</option></select></div>
+                <div class="tight"><button class="btn ghost" id="dash_load_view">Load</button></div>
+                <div class="tight"><button class="btn ghost" id="dash_delete_view">Delete</button></div>
+                <div class="tight"><span class="muted mono" id="dash_msg"></span></div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Overview (current scan)</div>
+                <div id="dash_overview" class="mono" style="font-size:12px;"></div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Trends (last 30 days)</div>
+                <div class="row" style="gap:10px; margin-bottom:8px;">
+                  <div class="tight">
+                    <select id="trend_group" style="width:220px">
+                      <option value="team">group by team</option>
+                      <option value="environment">group by environment</option>
+                      <option value="owner">group by owner</option>
+                      <option value="criticality">group by criticality</option>
+                    </select>
+                  </div>
+                  <div class="tight">
+                    <select id="trend_metric" style="width:220px">
+                      <option value="avg_score">avg quantum score</option>
+                      <option value="avg_findings">avg findings count</option>
+                      <option value="assets_with_findings">assets with findings</option>
+                    </select>
+                  </div>
+                  <div class="tight">
+                    <input id="trend_days" type="number" min="1" max="3650" value="30" style="width:120px" />
+                  </div>
+                  <div class="tight"><button class="btn ghost" id="trend_refresh" onclick="loadDashboardTrend()">Load trend</button></div>
+                </div>
+                <div id="dash_trend" class="mono" style="font-size:12px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
 </body>
 </html>
