@@ -4,7 +4,7 @@ import os
 import time
 import uuid
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from collections import defaultdict, deque
 
@@ -45,6 +45,8 @@ from db import (
     due_schedules,
     mark_schedule_ran,
     save_scan_asset_summaries,
+    list_scan_results,
+    list_scan_results_since,
     get_asset_history,
 )
 
@@ -1055,3 +1057,172 @@ def api_fix_next(
 
     items.sort(key=lambda x: (-x["priority_score"], x["asset_key"]))
     return {"scan_id": sid, "items": items[:limit]}
+
+
+# -----------------------------
+# Sprint 6: Dashboards / Metrics
+# -----------------------------
+
+def _iso_days_ago(days: int) -> str:
+    days = max(1, min(int(days), 3650))
+    dt = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    return dt.replace(microsecond=0).isoformat() + "Z"
+
+@app.get("/metrics/scan/{scan_id}/overview")
+def metrics_overview(
+    scan_id: str,
+    owner: str = Query("", description="Filter by owner snapshot"),
+    team: str = Query("", description="Filter by team snapshot"),
+    environment: str = Query("", description="Filter by environment snapshot"),
+    criticality: str = Query("", description="Filter by criticality snapshot"),
+    top_n: int = Query(20, ge=1, le=200),
+):
+    rows = list_scan_results(
+        scan_id=scan_id,
+        owner=owner,
+        team=team,
+        environment=environment,
+        criticality=criticality,
+        limit=20000,
+    )
+
+    counts = {
+        "assets_total": len(rows),
+        "assets_with_findings": 0,
+        "risk_levels": {},
+        "pqc_relevance": {},
+        "tls_versions": {},
+        "key_types": {},
+    }
+
+    for r in rows:
+        fc = int(r.get("findings_count") or 0)
+        if fc > 0:
+            counts["assets_with_findings"] += 1
+        rl = (r.get("risk_level") or "unknown").lower()
+        counts["risk_levels"][rl] = counts["risk_levels"].get(rl, 0) + 1
+        pr = (r.get("pqc_relevance") or "unknown").lower()
+        counts["pqc_relevance"][pr] = counts["pqc_relevance"].get(pr, 0) + 1
+        tv = (r.get("tls_version") or "unknown")
+        counts["tls_versions"][tv] = counts["tls_versions"].get(tv, 0) + 1
+        kt = (r.get("key_type") or "unknown")
+        counts["key_types"][kt] = counts["key_types"].get(kt, 0) + 1
+
+    # top assets: by quantum_score, then findings_count
+    top_assets = sorted(
+        rows,
+        key=lambda x: (float(x.get("quantum_score") or 0.0), int(x.get("findings_count") or 0)),
+        reverse=True,
+    )[: int(top_n)]
+
+    return {
+        "scan_id": scan_id,
+        "filters": {
+            "owner": owner,
+            "team": team,
+            "environment": environment,
+            "criticality": criticality,
+        },
+        "counts": counts,
+        "top_assets": top_assets,
+    }
+
+@app.get("/metrics/trends")
+def metrics_trends(
+    days: int = Query(30, ge=1, le=3650),
+    group_by: str = Query("team", pattern="^(team|environment|owner|criticality)$"),
+    metric: str = Query("avg_score", pattern="^(avg_score|avg_findings|assets_with_findings)$"),
+    top_groups: int = Query(5, ge=1, le=25),
+):
+
+    try:
+        since_iso = _iso_days_ago(days)
+        rows = list_scan_results_since(since_iso)
+
+        # Bucket by day + group
+        buckets = {}  # (day, group) -> accum
+        for r in rows:
+            scanned_at = str(r.get("scanned_at") or "")
+            day = scanned_at[:10] if len(scanned_at) >= 10 else "unknown"
+            g = (r.get(group_by) or "(unassigned)") if group_by in ("team","environment","owner","criticality") else "(unassigned)"
+
+            key = (day, g)
+            b = buckets.get(key)
+            if not b:
+                b = {"sum_score": 0.0, "sum_findings": 0, "count": 0, "assets_with_findings": 0}
+                buckets[key] = b
+            b["sum_score"] += float(r.get("quantum_score") or 0.0)
+            fc = int(r.get("findings_count") or 0)
+            b["sum_findings"] += fc
+            b["count"] += 1
+            if fc > 0:
+                b["assets_with_findings"] += 1
+
+        # Determine top groups by count across window
+        group_totals = {}
+        for (day, g), b in buckets.items():
+            gt = group_totals.get(g)
+            if not gt:
+                gt = {"sum_score": 0.0, "sum_findings": 0, "count": 0, "assets_with_findings": 0}
+                group_totals[g] = gt
+            gt["sum_score"] += b["sum_score"]
+            gt["sum_findings"] += b["sum_findings"]
+            gt["count"] += b["count"]
+            gt["assets_with_findings"] += b["assets_with_findings"]
+
+        # Rank groups
+        def _rank_val(gname: str) -> float:
+            gt = group_totals.get(gname, {})
+            if metric == "avg_findings":
+                c = max(1, int(gt.get("count", 0)))
+                return float(gt.get("sum_findings", 0)) / c
+            if metric == "assets_with_findings":
+                return float(gt.get("assets_with_findings", 0))
+            c = max(1, int(gt.get("count", 0)))
+            return float(gt.get("sum_score", 0.0)) / c
+
+        top = sorted(group_totals.keys(), key=_rank_val, reverse=True)[: int(top_groups)]
+
+        points = []
+        for (day, g), b in buckets.items():
+            if g not in top:
+                continue
+            if metric == "avg_findings":
+                val = b["sum_findings"] / max(1, b["count"])
+            elif metric == "assets_with_findings":
+                val = b["assets_with_findings"]
+            else:
+                val = b["sum_score"] / max(1, b["count"])
+            points.append({"day": day, "group": g, "value": val})
+
+        points.sort(key=lambda x: (x["day"], x["group"]))
+        return {
+            "since": since_iso,
+            "days": days,
+            "group_by": group_by,
+            "metric": metric,
+            "top_groups": top,
+            "points": points,
+        }
+    except Exception as e:
+        # Never 500 the UI: return empty points plus an error field for debugging
+        return {
+            "since": _iso_days_ago(days),
+            "days": days,
+            "group_by": group_by,
+            "metric": metric,
+            "top_groups": [],
+            "points": [],
+            "error": str(e),
+        }
+
+
+
+
+
+
+def _iso_days_ago(days: int) -> str:
+    """UTC timestamp (ISO8601 + Z) for N days ago."""
+    days = max(0, int(days or 0))
+    dt = datetime.utcnow() - timedelta(days=days)
+    return dt.isoformat() + "Z"

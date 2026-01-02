@@ -757,3 +757,79 @@ def get_asset_history(asset_key_str: str, limit: int = 50) -> list[dict]:
             (asset_key_str, limit),
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def list_scan_results(scan_id: str, owner: str = "", team: str = "", environment: str = "", criticality: str = "", limit: int = 5000) -> list[dict]:
+    """Return scan_results rows for a scan, optionally filtered by inventory snapshot fields."""
+    limit = max(1, min(int(limit), 20000))
+    owner = (owner or "").strip()
+    team = (team or "").strip()
+    environment = (environment or "").strip()
+    criticality = (criticality or "").strip()
+
+    clauses = ["scan_id = ?"]
+    params = [scan_id]
+
+    if owner:
+        clauses.append("owner = ?")
+        params.append(owner)
+    if team:
+        clauses.append("team = ?")
+        params.append(team)
+    if environment:
+        clauses.append("environment = ?")
+        params.append(environment)
+    if criticality:
+        clauses.append("criticality = ?")
+        params.append(criticality)
+
+    where = " AND ".join(clauses)
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""
+            SELECT asset_key, scan_id, scanned_at, risk_level, quantum_score, findings_count,
+                   pqc_relevance, tls_version, key_type, sig_algorithm,
+                   owner, team, environment, criticality
+            FROM scan_results
+            WHERE {where}
+            ORDER BY quantum_score DESC, findings_count DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+def list_scan_results_since(since_iso: str, limit: int = 200000) -> list[dict]:
+    """Return scan_results rows since a timestamp (ISO).
+    This is used for trends. If the scan_results table is missing (e.g., DB was created before Sprint 5/6),
+    we gracefully return an empty list instead of crashing the API.
+    """
+    limit = max(1, min(int(limit), 400000))
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT asset_key, scan_id, scanned_at, risk_level, quantum_score, findings_count,
+                       pqc_relevance, tls_version, key_type, sig_algorithm,
+                       owner, team, environment, criticality
+                FROM scan_results
+                WHERE scanned_at >= ?
+                ORDER BY scanned_at ASC
+                LIMIT ?
+                """,
+                (since_iso, limit),
+            ).fetchall()
+        except sqlite3.OperationalError as e:
+            # Typical: "no such table: scan_results"
+            if "no such table" in str(e).lower():
+                # Ensure tables exist for future calls
+                try:
+                    _ensure_sprint5_tables(conn)
+                    conn.commit()
+                except Exception:
+                    pass
+                return []
+            raise
+        return [dict(r) for r in rows]
