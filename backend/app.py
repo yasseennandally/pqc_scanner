@@ -1065,7 +1065,7 @@ def api_fix_next(
 
 def _iso_days_ago(days: int) -> str:
     days = max(1, min(int(days), 3650))
-    dt = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    dt = datetime.utcnow() - timedelta(days=days)
     return dt.replace(microsecond=0).isoformat() + "Z"
 
 @app.get("/metrics/scan/{scan_id}/overview")
@@ -1193,7 +1193,7 @@ def metrics_trends(
                 val = b["assets_with_findings"]
             else:
                 val = b["sum_score"] / max(1, b["count"])
-            points.append({"day": day, "group": g, "value": val})
+            points.append({"day": day, "group": g, "value": val, "n": int(b.get("count") or 0), "assets_with_findings": int(b.get("assets_with_findings") or 0)})
 
         points.sort(key=lambda x: (x["day"], x["group"]))
         return {
@@ -1219,10 +1219,3 @@ def metrics_trends(
 
 
 
-
-
-def _iso_days_ago(days: int) -> str:
-    """UTC timestamp (ISO8601 + Z) for N days ago."""
-    days = max(0, int(days or 0))
-    dt = datetime.utcnow() - timedelta(days=days)
-    return dt.isoformat() + "Z"
