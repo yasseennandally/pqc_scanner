@@ -509,31 +509,46 @@ def _try_get_ocsp_staple(ssock: ssl.SSLSocket) -> Dict[str, Any]:
         "ocsp_stapled_next_update": "",
         "ocsp_stapled_produced_at": "",
 
+        "ocsp_response_status": "",
+        "ocsp_stapled_is_stale": False,
+        "ocsp_stapled_stale_by_days": None,
+
         "ocsp_reachability": [],
         "crl_reachability": [],
     }
 
-    try:
-        attr = getattr(ssock, "ocsp_response", None)
+    # A few possible attribute names depending on Python/OpenSSL build.
+    candidates = [
+        "ocsp_response",         # property or method on some builds
+        "get_ocsp_response",     # some wrappers
+    ]
 
-        # Method form
-        if callable(attr):
-            out["ocsp_stapling_supported"] = True
-            resp = attr()
-        else:
-            # Property form
-            resp = attr
-            if resp is not None:
+    try:
+        resp = None
+        for name in candidates:
+            if hasattr(ssock, name):
+                attr = getattr(ssock, name)
                 out["ocsp_stapling_supported"] = True
+                resp = attr() if callable(attr) else attr
+                break
 
         if isinstance(resp, (bytes, bytearray)) and len(resp) > 0:
             out["ocsp_stapled"] = True
             out["ocsp_stapled_len"] = len(resp)
             out["ocsp_stapled_sha256"] = hashlib.sha256(bytes(resp)).hexdigest()
+
+            # Parse stapled OCSP response (best-effort)
+            try:
+                parsed = _parse_stapled_ocsp(bytes(resp))
+                if isinstance(parsed, dict):
+                    out.update(parsed)
+            except Exception:
+                pass
     except Exception:
         pass
 
     return out
+
 
 
 def _get_cert_chain_der_with_source(ssock: ssl.SSLSocket) -> Tuple[List[bytes], str, str, str]:

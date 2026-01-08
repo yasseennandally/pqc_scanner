@@ -283,19 +283,20 @@ def _create_scan_and_start(targets: List[str], source: str = "manual", collectio
 
     scan = {
         "id": scan_id,
-        "status": "running",
+        "status": "queued",
         "created_at": created_at,
         "progress": prog,
         "error": "",
         "results": [],
         "summary": {},
+        "job_id": "",
         "meta": {"source": source, "collection_id": collection_id},
     }
     _cache_put(scan)
 
     save_scan_row(
         scan_id=scan_id,
-        status="running",
+        status="queued",
         created_at=created_at,
         progress=prog,
         error_text="",
@@ -303,11 +304,14 @@ def _create_scan_and_start(targets: List[str], source: str = "manual", collectio
         summary={},
     )
 
-    t = threading.Thread(target=_scan_worker, args=(scan_id, targets), daemon=True)
-    t.start()
+    # Enqueue Celery job (single execution model)
+    res = run_scan_task.delay(scan_id, targets)
+    update_scan_job(scan_id, job_id=res.id, job_state="PENDING")
 
-    return {"id": scan_id, "status": "running", "created_at": created_at.isoformat() + "Z"}
+    scan["job_id"] = res.id
+    _cache_put(scan)
 
+    return {"id": scan_id, "status": "queued", "created_at": created_at.isoformat() + "Z", "job_id": res.id}
 
 def _scheduler_loop():
     # Runs forever, triggers collection scans when due.
@@ -331,6 +335,10 @@ def _scheduler_loop():
 @app.on_event("startup")
 def _start_scheduler():
     global _SCHED_THREAD
+    enabled = os.getenv("ENABLE_INPROCESS_SCHEDULER", "0").strip().lower() in ("1", "true", "yes")
+    if not enabled:
+        # In Docker/production we prefer Celery Beat (see tasks.enqueue_due_schedules).
+        return
     try:
         if _SCHED_THREAD and _SCHED_THREAD.is_alive():
             return
