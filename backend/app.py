@@ -10,17 +10,20 @@ from collections import defaultdict, deque
 
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from scanner import scan_host, parse_target
 from policy import summarize_results
 from migration import build_tls_migration_plan
+from tasks import celery_app, run_scan_task
 from db import (
     init_db,
     save_scan_row,
     update_scan_progress,
-    save_scan_results,
+    save_scan_results, update_scan_job,
     load_scan_row,
     list_scan_rows,
     asset_key,
@@ -66,6 +69,7 @@ class ScanProgress(BaseModel):
 
 
 class ScanStatus(BaseModel):
+    job_id: str = ""
     id: str
     status: str
     created_at: datetime
@@ -93,8 +97,8 @@ _SCANS_LOCK = threading.Lock()
 API_KEY = os.getenv("PQC_API_KEY", "").strip()
 PROTECTED_PREFIXES = ("/scan", "/scans", "/code-scan")
 
-RATE_LIMIT_WINDOW_SECONDS = 60
-RATE_LIMIT_MAX_REQUESTS = 60
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("PQC_RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_MAX_REQUESTS = int(os.getenv("PQC_RATE_LIMIT_MAX_REQUESTS", "240"))
 _requests_by_ip = defaultdict(deque)
 
 
@@ -239,6 +243,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Serve frontend UI (put index.html and assets under ./static)
+app.mount("/ui", StaticFiles(directory="static", html=True), name="ui")
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/ui/")
+
 
 
 @app.on_event("startup")
@@ -476,6 +489,11 @@ def _progress(total: int, done: int) -> Dict[str, int]:
         pct = 100
     return {"total": total, "done": done, "percent": pct}
 
+def _now_iso() -> str:
+    """UTC timestamp in ISO 8601 with a trailing 'Z'."""
+    return datetime.utcnow().isoformat() + "Z"
+
+
 
 def _cache_put(scan: Dict[str, Any]) -> None:
     with _SCANS_LOCK:
@@ -589,20 +607,10 @@ def create_scan(request: ScanRequest):
     created_at = datetime.utcnow()
     prog = _progress(len(normalized), 0)
 
-    scan = {
-        "id": scan_id,
-        "status": "running",
-        "created_at": created_at,
-        "progress": prog,
-        "error": "",
-        "results": [],
-        "summary": {},
-    }
-    _cache_put(scan)
-
+    # Persist scan row immediately (queued)
     save_scan_row(
         scan_id=scan_id,
-        status="running",
+        status="queued",
         created_at=created_at,
         progress=prog,
         error_text="",
@@ -610,22 +618,35 @@ def create_scan(request: ScanRequest):
         summary={},
     )
 
-    t = threading.Thread(target=_scan_worker, args=(scan_id, normalized), daemon=True)
-    t.start()
+    # Enqueue Celery job
+    res = run_scan_task.delay(scan_id, normalized)
+    update_scan_job(scan_id, job_id=res.id, job_state="PENDING")
 
-    return ScanStatus(id=scan_id, status="running", created_at=created_at, progress=ScanProgress(**prog), error="")
+    return ScanStatus(
+        job_id=res.id,
+        id=scan_id,
+        status="queued",
+        created_at=created_at,
+        progress=ScanProgress(**prog),
+        error="",
+    )
+
 
 
 @app.get("/scans/{scan_id}", response_model=ScanStatus)
 def get_scan(scan_id: str):
-    scan = _cache_get(scan_id)
+    # IMPORTANT: scans are executed asynchronously by Celery workers which update SQLite.
+    # Do NOT rely on in-memory cache for non-terminal states, otherwise UI will never see updates.
+    scan = load_scan_row(scan_id)
     if not scan:
-        scan = load_scan_row(scan_id)
-        if not scan:
-            raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    # Cache only terminal states (optional perf)
+    if (scan.get("status") or "").lower() in ("done", "completed", "failed"):
         _cache_put(scan)
 
     return ScanStatus(
+        job_id=scan.get("job_id", "") or "",
         id=scan["id"],
         status=scan["status"],
         created_at=scan["created_at"],
@@ -634,13 +655,15 @@ def get_scan(scan_id: str):
     )
 
 
+
 @app.get("/scans/{scan_id}/results", response_model=ScanWithResults)
 def get_scan_results(scan_id: str):
-    scan = _cache_get(scan_id)
+    # Reload from SQLite so async worker updates are visible
+    scan = load_scan_row(scan_id)
     if not scan:
-        scan = load_scan_row(scan_id)
-        if not scan:
-            raise HTTPException(status_code=404, detail="Scan not found")
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    if (scan.get("status") or "").lower() in ("done", "completed", "failed"):
         _cache_put(scan)
 
     # If scan is still running, you still get partial results.
@@ -771,9 +794,10 @@ def api_list_assets(
 @app.get("/assets/{asset_key_str}")
 def api_get_asset(asset_key_str: str):
     a = get_asset(asset_key_str)
-    if not a:
-        raise HTTPException(status_code=404, detail="asset not found")
-    return a
+    if a:
+        return a
+    # Create an empty asset record so the UI asset editor can open without a 404.
+    return upsert_asset(asset_key_str=asset_key_str)
 
 
 @app.put("/assets/{asset_key_str}")
@@ -1218,4 +1242,22 @@ def metrics_trends(
 
 
 
+
+
+# -----------------------------
+# Jobs (Celery)
+# -----------------------------
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str):
+    try:
+        ar = celery_app.AsyncResult(job_id)
+        meta = ar.info if isinstance(ar.info, dict) else {}
+        return {
+            "job_id": job_id,
+            "state": ar.state,
+            "meta": meta,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 

@@ -1,0 +1,2281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Quantum / PQC Migration Tool</title>
+  <style>
+    :root{
+      --bg:#0b1020;
+      --panel:rgba(12, 18, 36, .72);
+      --panel2:rgba(15,23,42,.65);
+      --border:rgba(148,163,184,.18);
+      --text:#e5e7eb;
+      --muted:#94a3b8;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --radius:18px;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background: radial-gradient(1200px 600px at 20% -10%, rgba(56,189,248,.18), transparent 55%),
+                  radial-gradient(1000px 600px at 80% 0%, rgba(167,139,250,.16), transparent 55%),
+                  var(--bg);
+      color:var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    .wrap{max-width:1180px; margin:24px auto; padding:0 16px;}
+    .top{
+      display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap;
+      padding:16px 18px;
+      border:1px solid var(--border);
+      background: linear-gradient(180deg, rgba(17, 24, 39, .72), rgba(17, 24, 39, .35));
+      border-radius: var(--radius);
+    }
+    .brand{display:flex; flex-direction:column; gap:4px;}
+    .brand h1{margin:0; font-size:18px; letter-spacing:.2px;}
+    .brand .sub{color:var(--muted); font-size:12px;}
+    .mono{font-family: var(--mono);}
+    .muted{color:var(--muted);}
+    .grid{
+      display:grid;
+      grid-template-columns: 1.2fr .8fr;
+      gap:14px;
+      margin-top:14px;
+    }
+    @media (max-width: 960px){
+      .grid{grid-template-columns:1fr;}
+    }
+    .card{
+      border:1px solid var(--border);
+      background: var(--panel);
+      border-radius: var(--radius);
+      padding:14px;
+    }
+    textarea, input{
+      width:100%;
+      background: rgba(2,6,23,.65);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px 12px;
+      outline:none;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    textarea{min-height: 132px; resize: vertical;}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .row > *{flex: 1;}
+    .row .tight{flex:0 0 auto;}
+    .btn{
+      border:1px solid var(--border);
+      background: rgba(17,24,39,.65);
+      color:var(--text);
+      border-radius: 999px;
+      padding: 9px 12px;
+      font-weight: 600;
+      cursor:pointer;
+      font-size: 12px;
+      transition: transform .04s ease, background .18s ease;
+    }
+    .btn:hover{background: rgba(17,24,39,.9)}
+    .btn:active{transform: translateY(1px)}
+    .btn.ghost{background: transparent;}
+    .btn:disabled{opacity:.45; cursor:not-allowed;}
+    .pill{
+      display:inline-flex; align-items:center; gap:6px;
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background: rgba(16,26,51,.55);
+      color: var(--muted);
+    }
+    .pill.ok{border-color: rgba(34,197,94,.6); color:#bbf7d0; background: rgba(34,197,94,.10);}
+    .pill.bad{border-color: rgba(239,68,68,.6); color:#fecaca; background: rgba(239,68,68,.10);}
+    .pill.warn{border-color: rgba(245,158,11,.65); color:#fde68a; background: rgba(245,158,11,.10);}
+
+    .progressWrap{display:flex; flex-direction:column; gap:8px; margin-top:10px;}
+    .bar{
+      width:100%;
+      height: 10px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      background: rgba(2,6,23,.55);
+      overflow:hidden;
+    }
+    .bar > div{
+      height:100%;
+      width:0%;
+      background: linear-gradient(90deg, rgba(56,189,248,.9), rgba(167,139,250,.9));
+    }
+    table{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      overflow:hidden;
+      border-radius: 16px;
+      border:1px solid var(--border);
+      background: rgba(2,6,23,.35);
+    }
+    thead th{
+      text-align:left;
+      padding: 10px 10px;
+      background: rgba(15,23,42,.85);
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing:.35px;
+    }
+    tbody td{
+      padding: 10px 10px;
+      border-top: 1px solid rgba(148,163,184,.14);
+      vertical-align: top;
+    }
+    tbody tr:hover td{background: rgba(15,23,42,.35);}
+    details summary{
+      list-style:none;
+      cursor:pointer;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      user-select:none;
+    }
+    details summary::-webkit-details-marker{display:none;}
+    .chev{
+      display:inline-flex;
+      width:22px; height:22px;
+      border-radius: 8px;
+      border:1px solid var(--border);
+      align-items:center; justify-content:center;
+      background: rgba(15,23,42,.55);
+      color: var(--muted);
+      font-weight: 800;
+    }
+    details[open] .chev{transform: rotate(90deg);}
+    .kvs{
+      display:grid;
+      grid-template-columns: 190px 1fr;
+      gap: 8px 10px;
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid var(--border);
+      background: rgba(2,6,23,.35);
+      border-radius: 14px;
+    }
+    .kvs > div:nth-child(odd){color: var(--muted); font-family: var(--mono); font-size: 11px;}
+    pre{
+      white-space: pre-wrap;
+      word-break: break-word;
+      border:1px solid var(--border);
+      background: rgba(2,6,23,.55);
+      border-radius: 14px;
+      padding: 10px;
+      margin: 10px 0 0 0;
+      font-size: 11px;
+    }
+    .badge{
+      display:inline-flex; align-items:center; gap:6px;
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border:1px solid var(--border);
+      color: var(--muted);
+      background: rgba(16,26,51,.55);
+      margin-left: 8px;
+    }
+    .badge.ok{border-color: rgba(34,197,94,.6); color:#bbf7d0; background: rgba(34,197,94,.10);}
+    .badge.bad{border-color: rgba(239,68,68,.6); color:#fecaca; background: rgba(239,68,68,.10);}
+    .badge.warn{border-color: rgba(245,158,11,.65); color:#fde68a; background: rgba(245,158,11,.10);}
+
+    .cellStack{display:flex; flex-direction:column; gap:2px;}
+    .cellSub{font-size:10px; color:var(--muted); font-family: var(--mono); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:240px;}
+
+    .miniTable{
+      width:100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      overflow:hidden;
+      border-radius: 12px;
+      border:1px solid var(--border);
+    }
+    .miniTable th, .miniTable td{padding:8px 10px;}
+    .miniTable th{background: rgba(15,23,42,.85); color: var(--muted); font-size:10px; letter-spacing:.3px;}
+    .miniTable tr:hover td{background: rgba(15,23,42,.45);}
+
+    /* diff panel */
+    .diffPanel{
+      margin-top: 12px;
+      border: 1px solid var(--border);
+      background: rgba(12, 18, 36, .65);
+      border-radius: 16px;
+      padding: 12px;
+      display:none;
+    }
+    .diffHeader{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;}
+    .diffHeader .title{font-weight:700;}
+    .diffStats{display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;}
+    .diffList{
+      margin-top: 10px;
+      display:grid;
+      grid-template-columns: repeat(2, minmax(260px, 1fr));
+      gap: 10px;
+    }
+    @media (max-width: 980px){ .diffList{grid-template-columns: 1fr;} }
+    .diffCard{
+      border:1px solid var(--border);
+      border-radius: 14px;
+      padding: 10px;
+      background: rgba(15,23,42,.55);
+    }
+    .diffCard .h{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom: 6px;}
+    .diffCard .asset{font-family: var(--mono); font-size: 12px;}
+    .diffCard ul{margin:6px 0 0 18px; padding:0;}
+    .diffCard li{margin:2px 0; font-size: 12px;}
+  
+    input[type=checkbox]{width:auto; padding:0; border-radius:4px;}
+  
+    .assetLink{cursor:pointer; text-decoration: underline dotted rgba(148,163,184,.35);}
+  
+    /* Sprint 4 Fix Next */
+    .fnGrid{display:grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap:10px; margin-top:10px;}
+    @media (max-width: 980px){ .fnGrid{grid-template-columns: 1fr;} }
+    .fnCard{border:1px solid var(--border); border-radius:14px; padding:10px; background: rgba(15,23,42,.55);}
+    .fnHead{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+    .fnAsset{font-family: var(--mono); font-size:12px;}
+    .fnMeta{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;}
+    .fnFind{margin-top:10px;}
+    .fnFind ul{margin:6px 0 0 18px; padding:0;}
+    .fnFind li{margin:2px 0; font-size:12px;}
+  
+    .modalBackdrop{
+      position: fixed; inset: 0; background: rgba(2,6,23,.72);
+      display:none; align-items:center; justify-content:center;
+      z-index: 50;
+    }
+    .modalBox{
+      width: min(860px, 92vw);
+      max-height: 86vh;
+      overflow:auto;
+      background: rgba(15,23,42,.92);
+      border: 1px solid rgba(148,163,184,.20);
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: 0 14px 40px rgba(0,0,0,.45);
+    }
+    .modalHeader{display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px;}
+    .modalTitle{font-weight:700;}
+    .modalGrid{display:grid; grid-template-columns: 1fr 1fr; gap:12px;}
+    .modalGrid .full{grid-column: 1 / -1;}
+    select, option{color: var(--text); background: rgba(2,6,23,.88);}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="brand">
+        <h1>Quantum / PQC Migration Tool <span class="muted mono" style="font-size:12px;">SPRINT7-FULL</span></h1>
+        <div class="sub">TLS / PKI posture + PQC readiness • Sprint 2 (Baseline + Diff)</div>
+      </div>
+      <div class="row" style="justify-content:flex-end; flex: 1;">
+        <div class="tight" style="min-width:320px;">
+          <input id="apiBase" placeholder="API base (e.g., http://localhost:8000)" />
+          <div class="muted" style="font-size:11px; margin-top:6px;">Using API: <span class="mono" id="apiBaseLabel"></span></div>
+        </div>
+        <div class="tight">
+          <button class="btn" id="loadLastBtn">Load last scan</button>
+        <label class="muted" style="font-size:11px; display:flex; align-items:center; gap:8px; margin-left:10px;">
+          <input type="checkbox" id="autoLoadCk" style="width:14px; height:14px; margin:0;">
+          Auto-load last scan
+        </label>
+        </div>
+        <div class="tight">
+          <button class="btn ghost" id="jsonBtn" disabled>JSON</button>
+        </div>
+        <div class="tight">
+          <button class="btn ghost" id="planBtn" disabled>Plan</button>
+        <button class="btn ghost" id="exportBtn" disabled>Export CSV</button>
+        <button class="btn ghost" id="dashBtn">Dashboard</button>
+        <button class="btn ghost" id="collectionsBtn">Collections</button>
+        <button class="btn ghost" id="schedulesBtn">Schedules</button>
+        <button class="btn ghost" id="fixNextBtn" disabled>Fix Next</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="muted" style="font-size:11px; margin-bottom:8px;">Targets (one per line): host or host:port</div>
+            <textarea id="targets" spellcheck="false">google.com
+facebook.com
+incomplete-chain.badssl.com</textarea>
+          </div>
+        </div>
+        <div class="row" style="margin-top:10px;">
+          <div class="tight">
+            <button class="btn" id="startBtn">Start scan</button>
+          </div>
+          <div class="tight">
+            <button class="btn ghost" id="baselineBtn" disabled>Set Baseline</button>
+          </div>
+          <div class="tight">
+            <button class="btn ghost" id="diffBtn" disabled>Diff vs Baseline</button>
+          </div>
+          <div class="tight">
+            <span class="pill" id="statusPill">Ready</span>
+          </div>
+        </div>
+
+        <div class="progressWrap">
+          <div class="bar"><div id="barFill"></div></div>
+          <div class="muted mono" id="progText">0% (0/0)</div>
+        </div>
+
+        <div id="baselineIndicator" class="muted" style="margin-top:10px; display:none;">
+          Baseline: <span class="mono" id="baselineText"></span>
+        </div>
+
+        <div id="diffPanel" class="diffPanel">
+          <div class="diffHeader">
+            <div class="title">Diff vs baseline</div>
+            <div class="row tight" style="gap:8px;">
+              <button class="btn ghost" id="filterAllBtn">All</button>
+              <button class="btn ghost" id="filterRegBtn">Regressions</button>
+              <button class="btn ghost" id="filterImpBtn">Improvements</button>
+              <button class="btn ghost" id="clearDiffBtn">Clear</button>
+            </div>
+          </div>
+          <div class="diffStats">
+            <span class="pill bad" id="regCount">Regressions: 0</span>
+            <span class="pill ok" id="impCount">Improvements: 0</span>
+            <span class="pill warn" id="noBaseCount">No baseline: 0</span>
+            <span class="pill" id="sameCount">Unchanged: 0</span>
+          </div>
+          <div id="diffList" class="diffList"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="muted" style="font-size:11px;">JSON / Plan Output</div>
+        <div id="jsonModal" style="display:none;"></div>
+        <!-- Collections Modal -->
+        <div class="modalBackdrop" id="collectionsBackdrop" onclick="closeCollections()">
+          <div class="modalBox" onclick="event.stopPropagation()">
+            <div class="modalHeader">
+              <div class="modalTitle">Collections</div>
+              <button class="btn ghost" id="collectionsCloseBtn" type="button" onclick="closeCollections()">Close</button>
+            </div>
+
+            <div class="modalGrid">
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Saved collections</div>
+                <div class="row">
+                  <div class="grow">
+                    <select id="coll_select" style="width:100%">
+                      <option value="">(none)</option>
+                    </select>
+                  </div>
+                  <div class="tight"><button class="btn ghost" id="coll_refresh">Refresh</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_load">Load</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_delete">Delete</button></div>
+                </div>
+              </div>
+
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Name</div>
+                <input id="coll_name" placeholder="e.g., Tier-0 Prod Edge" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Actions</div>
+                <div class="row">
+                  <div class="tight"><button class="btn" id="coll_save">Save</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_apply">Apply to targets</button></div>
+                  <div class="tight"><button class="btn ghost" id="coll_scan">Scan</button></div>
+                </div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Targets (one per line)</div>
+                <textarea id="coll_targets" rows="10" placeholder="example.com&#10;api.example.com:443"></textarea>
+              </div>
+
+              <div class="full"><span class="muted mono" id="coll_msg"></span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Schedules Modal -->
+        <div class="modalBackdrop" id="schedulesBackdrop" onclick="closeSchedules()">
+          <div class="modalBox" onclick="event.stopPropagation()">
+            <div class="modalHeader">
+              <div class="modalTitle">Schedules</div>
+              <button class="btn ghost" id="schedulesCloseBtn" type="button" onclick="closeSchedules()">Close</button>
+            </div>
+
+            <div class="modalGrid">
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Collection</div>
+                <select id="sch_collection" style="width:100%">
+                  <option value="">(choose)</option>
+                </select>
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Interval (minutes)</div>
+                <input id="sch_interval" type="number" min="1" max="10080" value="60" />
+              </div>
+              <div>
+                <label class="muted" style="font-size:11px; display:flex; align-items:center; gap:8px;">
+                  <input type="checkbox" id="sch_enabled" checked style="width:14px; height:14px; margin:0;">
+                  Enabled
+                </label>
+              </div>
+              <div class="row" style="align-items:end;">
+                <div class="tight"><button class="btn" id="sch_create">Create</button></div>
+                <div class="tight"><button class="btn ghost" id="sch_refresh">Refresh</button></div>
+                <div class="tight"><span class="muted mono" id="sch_msg"></span></div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Existing schedules</div>
+                <div id="sch_table" class="mono" style="font-size:11px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="fixNextPanel" style="display:none; margin-top:12px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+            <div style="font-weight:700;">Fix Next</div>
+            <div class="row tight" style="gap:8px;">
+              <button class="btn ghost" id="fixNextRefreshBtn">Refresh</button>
+              <button class="btn ghost" id="fixNextCloseBtn">Close</button>
+            </div>
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:6px;">
+            Prioritized queue based on findings + asset criticality/tags (Sprint 4)
+          </div>
+          <div class="muted mono" id="fn_msg" style="margin-top:10px;"></div>
+          <div id="fn_out" style="margin-top:10px;"></div>
+        </div>
+
+        <div style="margin-top:12px; padding-top:12px; border-top:1px solid var(--border);">
+          <div class="muted" style="font-size:11px; margin-bottom:8px;">Asset editor</div>
+          <div class="kvs" style="grid-template-columns: 150px 1fr;">
+            <div>asset_key</div><div><input id="ae_key" placeholder="e.g., google.com:443" /></div>
+            <div>owner</div><div><input id="ae_owner" placeholder="e.g., alice" /></div>
+            <div>team</div><div><input id="ae_team" placeholder="e.g., crypto" /></div>
+            <div>environment</div><div><input id="ae_env" placeholder="prod / staging / dev" /></div>
+            <div>criticality</div>
+            <div>
+              <select id="ae_crit" style="width:100%; background: rgba(2,6,23,.65); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 10px 12px; outline:none; font-size:12px;">
+                <option value="">—</option>
+                <option value="tier-0">tier-0</option>
+                <option value="tier-1">tier-1</option>
+                <option value="tier-2">tier-2</option>
+                <option value="tier-3">tier-3</option>
+              </select>
+            </div>
+            <div>confidentiality</div><div><input id="ae_conf" placeholder="e.g., 1y / 5y / 10y+" /></div>
+            <div>tags</div><div><input id="ae_tags" placeholder="comma separated, e.g., pqc, internet-facing" /></div>
+            <div>notes</div><div><input id="ae_notes" placeholder="optional" /></div>
+          </div>
+          <div class="row" style="margin-top:10px;">
+            <div class="tight"><button class="btn ghost" id="ae_load">Load</button></div>
+            <div class="tight"><button class="btn ghost" id="ae_history">History</button></div>
+            <div class="tight"><button class="btn" id="ae_save">Save</button></div>
+            <div class="tight"><span class="muted mono" id="ae_msg"></span></div>
+          </div>
+          <div class="muted" style="font-size:11px; margin-top:8px;">
+            Tip: click a host in the table to load its asset automatically.
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div style="font-weight:700;">Results</div>
+        <div class="muted" style="font-size:11px;">Expand a row for details (TLS, revocation, chain, findings).</div>
+        <div class="muted mono" id="resultsInfo" style="font-size:11px; margin-left:auto;">—</div>
+      </div>
+      <div style="margin-top:12px; overflow:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:58px;">+</th>
+              <th>host</th>
+              <th>port</th>
+              <th>TLS</th>
+              <th>key</th>
+              <th>sig</th>
+              <th>expiry</th>
+              <th>risk</th>
+              <th>PQC</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr><td colspan="9" class="muted">No results yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ---- Sprint 7: Job polling (Celery) ----
+  let currentJobId = "";
+  let jobPollTimer = null;
+  let lastScanRefreshAt = 0;
+
+  function setJobBoxVisible(v){
+    const box = document.getElementById("jobBox");
+    if (!box) return;
+    box.style.display = v ? "block" : "none";
+  }
+
+  function setJobUI(state, meta){
+    const st = document.getElementById("jobState");
+    const mt = document.getElementById("jobMeta");
+    const bar = document.getElementById("jobBar");
+    if (st) st.textContent = state || "—";
+    const done = (meta && (meta.done ?? meta.current)) ?? 0;
+    const total = (meta && (meta.total ?? meta.max)) ?? 0;
+    let pct = meta ? meta.percent : null;
+    if (pct == null && total) pct = Math.round((done/total)*100);
+    if (pct == null) pct = (state === "SUCCESS") ? 100 : 0;
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    if (mt){
+      if (total){
+        mt.textContent = `${done}/${total} (${pct}%)`;
+      } else if (pct){
+        mt.textContent = `${pct}%`;
+      } else {
+        mt.textContent = "";
+      }
+    }
+  }
+
+  async function fetchJob(jobId){
+    return await fetchJson(`/jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  async function tickJob(jobId){
+    const j = await fetchJob(jobId);
+    const state = j && j.state ? j.state : "PENDING";
+    const meta = j && j.meta ? j.meta : {};
+    setJobUI(state, meta);
+
+    if (state === "PROGRESS" || state === "STARTED" || state === "PENDING"){
+      if (currentScanId){
+        const now = Date.now();
+        if ((now - lastScanRefreshAt) > 6000){
+          lastScanRefreshAt = now;
+          await loadResults(true);
+        }
+      }
+      return;
+    }
+
+    if (state === "SUCCESS"){
+      if (currentScanId){
+        await loadResults(true);
+      }
+      stopJobPoll();
+      return;
+    }
+
+    if (state === "FAILURE"){
+      stopJobPoll();
+      alert("Job failed. Check API logs for details.");
+      return;
+    }
+  }
+
+  function stopJobPoll(){
+    if (jobPollTimer) clearInterval(jobPollTimer);
+    jobPollTimer = null;
+    currentJobId = "";
+  }
+
+  function startJobPoll(jobId){
+    if (!jobId) return;
+    currentJobId = jobId;
+    setJobBoxVisible(true);
+    setJobUI("PENDING", {});
+    if (jobPollTimer) clearInterval(jobPollTimer);
+    tickJob(jobId).catch(e => alert(`Job poll error: ${e.message}`));
+    jobPollTimer = setInterval(() => {
+      tickJob(jobId).catch(e => {
+        stopJobPoll();
+        console.warn('Job poll error', e);
+        if (String(e.message||'').includes('429')){
+          stopJobPoll();
+          setJobUI('THROTTLED', {});
+          setTimeout(()=>startJobPoll(jobId), 10000);
+          return;
+        }
+        alert(`Job poll error: ${e.message}`);
+      });
+    }, 3000);
+  }
+
+  
+  // Safe DOM helpers (avoid crashes if optional elements are missing)
+  function $(id){ return document.getElementById(id); }
+  function click(id, fn){ const el = $(id); if (el) el.onclick = fn; }
+  function on(id, ev, fn){ const el = $(id); if (el) el.addEventListener(ev, fn); }
+
+// ---------- helpers ----------
+  function escapeHtml(s){
+    return String(s ?? "").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+  function setStatus(text, kind=""){
+    const pill = document.getElementById("statusPill");
+    pill.textContent = text;
+    pill.className = "pill" + (kind ? " " + kind : "");
+  }
+  function setProgress(p){
+    const total = p?.total ?? 0;
+    const done = p?.done ?? 0;
+    const percent = p?.percent ?? (total ? Math.round((done/total)*100) : 0);
+    document.getElementById("barFill").style.width = `${percent}%`;
+    document.getElementById("progText").textContent = `${percent}% (${done}/${total})`;
+  }
+
+  const API_DEFAULT = localStorage.getItem("pqc_api_base") || "http://localhost:8000";
+  let API_BASE = API_DEFAULT;
+
+  
+
+  // --- Persist UI state (targets + last scan) ---
+  const LS_TARGETS_KEY = "pqc_targets";
+  const LS_LAST_SCAN_KEY = "pqc_last_scan_id";
+  const LS_AUTOLOAD_KEY = "pqc_autoload_last_scan";
+
+  function saveTargetsToStorage(){
+    try{
+      const v = (document.getElementById("targets")?.value || "").trimEnd();
+      localStorage.setItem(LS_TARGETS_KEY, v);
+    }catch(e){}
+  }
+  function loadTargetsFromStorage(){
+    try{
+      const v = localStorage.getItem(LS_TARGETS_KEY);
+      if (v !== null && v !== undefined){
+        const ta = document.getElementById("targets");
+        if (ta) ta.value = v;
+      }
+    }catch(e){}
+  }
+  function saveLastScanId(id){
+    try{ localStorage.setItem(LS_LAST_SCAN_KEY, String(id)); }catch(e){}
+  }
+  function getLastScanId(){
+    try{
+      const v = localStorage.getItem(LS_LAST_SCAN_KEY);
+      return v ? parseInt(v, 10) : null;
+    }catch(e){ return null; }
+  }
+  function isAutoLoadEnabled(){
+    try{
+      return localStorage.getItem(LS_AUTOLOAD_KEY) === "true";
+    }catch(e){ return false; }
+  }
+  function setAutoLoadEnabled(on){
+    try{ localStorage.setItem(LS_AUTOLOAD_KEY, on ? "true" : "false"); }catch(e){}
+  }
+
+function headers(){
+    // If you enable API keys in backend, add here:
+    // return {"Content-Type":"application/json","X-API-Key": "..."}
+    return {"Content-Type":"application/json"};
+  }
+
+  async function fetchJson(path, opts={}){
+    const url = path.startsWith("http") ? path : (API_BASE + path);
+    const res = await fetch(url, { ...opts, headers: { ...headers(), ...(opts.headers||{}) } });
+    if (!res.ok){
+      const t = await res.text().catch(()=> "");
+      if (res.status === 429){
+        let msg = "Too many requests (429). Backing off…";
+        try{
+          const j = JSON.parse(t || "{}");
+          if (j && j.detail) msg = j.detail;
+        }catch(e){}
+        throw new Error(msg);
+      }
+      throw new Error(`HTTP ${res.status}: ${t || res.statusText}`);
+    }
+    return await res.json();
+  }
+
+  // Normalize API responses: accept [] or {items:[]}
+  function _asList(x){
+    if (!x) return [];
+    if (Array.isArray(x)) return x;
+    if (typeof x === "object"){
+      if (Array.isArray(x.items)) return x.items;
+      if (Array.isArray(x.data)) return x.data;
+      if (Array.isArray(x.results)) return x.results;
+    }
+    return [];
+  }
+
+  // -----------------------------
+  // Sprint 5: Collections (modal)
+  // -----------------------------
+  function openCollections(){
+    const b = document.getElementById("collectionsBackdrop");
+    if (!b) return;
+    b.style.display = "flex";
+    setStatus("Collections opened", "ok");
+    loadCollections();
+  }
+  function closeCollections(){
+    const b = document.getElementById("collectionsBackdrop");
+    if (!b) return;
+    b.style.display = "none";
+  }
+  function setCollMsg(msg){ const el=document.getElementById("coll_msg"); if(el) el.textContent=msg||""; }
+
+  async function loadCollections(){
+    try{
+      setCollMsg("Loading…");
+      const resp = await fetchJson("/collections");
+      const items = _asList(resp);
+      const sel = document.getElementById("coll_select");
+      if (sel){
+        sel.innerHTML = '<option value="">(none)</option>' + items.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+      }
+      // also populate schedules collection select
+      const schSel = document.getElementById("sch_collection");
+      if (schSel){
+        schSel.innerHTML = '<option value="">(choose)</option>' + items.map(c=>`<option value="${c.id}">${escapeHtml(c.name)}</option>`).join("");
+      }
+      setCollMsg(`Loaded ${items.length} collection(s)`);
+    }catch(e){
+      setCollMsg(`Load failed: ${e.message}`);
+      setStatus(`Collections load failed`, "bad");
+    }
+  }
+
+  async function saveCollection(){
+    try{
+      const name = (document.getElementById("coll_name").value || "").trim();
+      const targets_text = (document.getElementById("coll_targets").value || "").trim();
+      if (!name) throw new Error("name is required");
+      if (!targets_text) throw new Error("targets are required");
+      setCollMsg("Saving…");
+      await fetchJson("/collections", { method:"POST", body: JSON.stringify({name, targets_text}) });
+      await loadCollections();
+      // select saved collection by name
+      const resp = await fetchJson("/collections");
+      const items = _asList(resp);
+      const saved = items.find(x=>x.name===name);
+      if (saved){
+        document.getElementById("coll_select").value = String(saved.id);
+      }
+      setCollMsg("Saved ✓");
+      setStatus("Collection saved", "ok");
+    }catch(e){
+      setCollMsg(`Save failed: ${e.message}`);
+      setStatus("Collection save failed", "bad");
+    }
+  }
+
+  async function loadSelectedCollectionIntoForm(){
+    try{
+      const id = document.getElementById("coll_select").value;
+      if (!id) throw new Error("select a collection");
+      setCollMsg("Loading…");
+      const c = await fetchJson(`/collections/${id}`);
+      document.getElementById("coll_name").value = c.name || "";
+      document.getElementById("coll_targets").value = c.targets_text || "";
+      setCollMsg("Loaded ✓");
+    }catch(e){
+      setCollMsg(`Load failed: ${e.message}`);
+    }
+  }
+
+  async function deleteSelectedCollection(){
+    try{
+      const id = document.getElementById("coll_select").value;
+      if (!id) throw new Error("select a collection");
+      if (!confirm("Delete this collection?")) return;
+      setCollMsg("Deleting…");
+      await fetchJson(`/collections/${id}`, { method:"DELETE" });
+      await loadCollections();
+      document.getElementById("coll_name").value = "";
+      document.getElementById("coll_targets").value = "";
+      setCollMsg("Deleted ✓");
+    }catch(e){
+      setCollMsg(`Delete failed: ${e.message}`);
+    }
+  }
+
+  function applyCollectionToTargets(){
+    const t = document.getElementById("coll_targets").value || "";
+    const ta = document.getElementById("targets");
+    if (ta){ ta.value = t; saveTargetsToStorage(); }
+    setCollMsg("Applied to targets ✓");
+  }
+
+  async function scanSelectedCollection(){
+    try{
+      const id = document.getElementById("coll_select").value;
+      const name = (document.getElementById("coll_name").value || "").trim();
+      const targets_text = (document.getElementById("coll_targets").value || "").trim();
+      // if not selected but name+targets provided, save first
+      let cid = id;
+      if (!cid){
+        if (!name || !targets_text) throw new Error("select a collection or fill name+targets then Save");
+        await saveCollection();
+        const resp = await fetchJson("/collections");
+        const items = _asList(resp);
+        const saved = items.find(x=>x.name===name);
+        if (!saved) throw new Error("could not resolve saved collection id");
+        cid = String(saved.id);
+      }
+      closeCollections();
+      setStatus("starting scan (collection)…", "warn");
+      const created = await fetchJson(`/collections/${cid}/scan`, { method:"POST" });
+      currentScanId = created.id;
+      saveLastScanId(currentScanId);
+      startPolling();
+      loadResults(true);
+    }catch(e){
+      setCollMsg(`Scan failed: ${e.message}`);
+      setStatus("Collection scan failed", "bad");
+    }
+  }
+
+  // -----------------------------
+  // Sprint 5: Schedules (modal)
+  // -----------------------------
+  function openSchedules(){
+    const b = document.getElementById("schedulesBackdrop");
+    if (!b) return;
+    b.style.display = "flex";
+    setStatus("Schedules opened", "ok");
+    loadCollections(); // populate collection select
+    loadSchedules();
+  }
+  function closeSchedules(){
+    const b = document.getElementById("schedulesBackdrop");
+    if (!b) return;
+    b.style.display = "none";
+  }
+  function setSchMsg(msg){ const el=document.getElementById("sch_msg"); if(el) el.textContent=msg||""; }
+
+  async function loadSchedules(){
+    try{
+      setSchMsg("Loading…");
+      const resp = await fetchJson("/schedules");
+      const items = _asList(resp);
+      const box = document.getElementById("sch_table");
+      if (box){
+        if (!items.length){
+          box.innerHTML = '<div class="muted">No schedules yet.</div>';
+        } else {
+          box.innerHTML = items.map(s=>{
+            const en = s.enabled ? "on" : "off";
+            return `<div style="padding:10px 0; border-top:1px solid rgba(148,163,184,.12);">
+              <div><b>${escapeHtml(s.collection_name || ("#"+s.collection_id))}</b> • every ${s.interval_minutes}m • <span class="pill ${s.enabled ? "ok":"warn"}">${en}</span></div>
+              <div class="muted" style="font-size:11px;">next: ${escapeHtml(s.next_run_at||"")} • last: ${escapeHtml(s.last_run_at||"")} • last_scan: ${escapeHtml(s.last_scan_id||"")}</div>
+              <div class="row" style="margin-top:6px;">
+                <div class="tight"><button class="btn ghost" onclick="runScheduleNow(${s.id})">Run now</button></div>
+                <div class="tight"><button class="btn ghost" onclick="toggleSchedule(${s.id}, ${s.enabled?0:1})">${s.enabled?"Disable":"Enable"}</button></div>
+                <div class="tight"><button class="btn ghost" onclick="deleteSchedule(${s.id})">Delete</button></div>
+              </div>
+            </div>`;
+          }).join("");
+        }
+      }
+      setSchMsg(`Loaded ${items.length} schedule(s)`);
+    }catch(e){
+      setSchMsg(`Load failed: ${e.message}`);
+      setStatus("Schedules load failed", "bad");
+    }
+  }
+
+  async function createScheduleFromForm(){
+    try{
+      const collection_id = parseInt(document.getElementById("sch_collection").value || "0", 10);
+      const interval_minutes = parseInt(document.getElementById("sch_interval").value || "0", 10);
+      const enabled = !!document.getElementById("sch_enabled").checked;
+      if (!collection_id) throw new Error("choose a collection");
+      if (!interval_minutes || interval_minutes < 1) throw new Error("interval must be >= 1");
+      setSchMsg("Creating…");
+      await fetchJson("/schedules", { method:"POST", body: JSON.stringify({collection_id, interval_minutes, enabled}) });
+      await loadSchedules();
+      setSchMsg("Created ✓");
+      setStatus("Schedule created", "ok");
+    }catch(e){
+      setSchMsg(`Create failed: ${e.message}`);
+      setStatus("Schedule create failed", "bad");
+    }
+  }
+
+  async function runScheduleNow(id){
+    try{
+      setSchMsg("Running…");
+      const created = await fetchJson(`/schedules/${id}/run-now`, { method:"POST" });
+      currentScanId = created.id;
+      saveLastScanId(currentScanId);
+      closeSchedules();
+      startPolling();
+      loadResults(true);
+      setStatus("running scheduled scan…", "warn");
+    }catch(e){
+      setSchMsg(`Run failed: ${e.message}`);
+      setStatus("Schedule run failed", "bad");
+    }
+  }
+
+  async function toggleSchedule(id, enabledInt){
+    try{
+      setSchMsg("Updating…");
+      await fetchJson(`/schedules/${id}`, { method:"PUT", body: JSON.stringify({enabled: enabledInt ? true : false}) });
+      await loadSchedules();
+      setSchMsg("Updated ✓");
+    }catch(e){
+      setSchMsg(`Update failed: ${e.message}`);
+    }
+  }
+
+  async function deleteSchedule(id){
+    try{
+      if (!confirm("Delete this schedule?")) return;
+      setSchMsg("Deleting…");
+      await fetchJson(`/schedules/${id}`, { method:"DELETE" });
+      await loadSchedules();
+      setSchMsg("Deleted ✓");
+    }catch(e){
+      setSchMsg(`Delete failed: ${e.message}`);
+    }
+  }
+  // expose for inline onclick in schedule rows
+  window.runScheduleNow = runScheduleNow;
+  window.toggleSchedule = toggleSchedule;
+  window.deleteSchedule = deleteSchedule;
+
+  // -----------------------------
+  // Sprint 5: Asset history + Export CSV
+  // -----------------------------
+  async function showAssetHistory(){
+    try{
+      const ak = (document.getElementById("ae_key").value || "").trim();
+      if (!ak) throw new Error("asset_key is empty");
+      const h = await fetchJson(`/assets/${encodeURIComponent(ak)}/history?limit=50`);
+      openJson(h, `History: ${ak}`);
+    }catch(e){
+      alert(`History error: ${e.message}`);
+    }
+  }
+
+  function exportCsv(){
+    if (!currentScanId){ alert("No scan loaded."); return; }
+    const url = API_BASE.replace(/\/$/, "") + `/scans/${encodeURIComponent(currentScanId)}/export.csv`;
+    // trigger download
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scan_${currentScanId}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // --- Asset editor helpers ---
+  function setAssetEditorMessage(msg){
+    const el = document.getElementById("ae_msg");
+    if (el) el.textContent = msg || "";
+  }
+
+  function fillAssetEditorFromAsset(asset){
+    document.getElementById("ae_key").value = asset.asset_key || "";
+    document.getElementById("ae_owner").value = asset.owner || "";
+    document.getElementById("ae_team").value = asset.team || "";
+    document.getElementById("ae_env").value = asset.environment || "";
+    document.getElementById("ae_crit").value = asset.criticality || "";
+    document.getElementById("ae_conf").value = asset.confidentiality_lifetime || "";
+    document.getElementById("ae_tags").value = Array.isArray(asset.tags) ? asset.tags.join(", ") : (asset.tags || "");
+    document.getElementById("ae_notes").value = asset.notes || "";
+  }
+
+  async function loadAssetIntoEditor(assetKey){
+    try{
+      if (!assetKey) throw new Error("asset_key is empty");
+      const a = await fetchJson(`/assets/${encodeURIComponent(assetKey)}`);
+      fillAssetEditorFromAsset(a);
+      setAssetEditorMessage("Loaded ✓");
+    }catch(e){
+      setAssetEditorMessage(`Load failed: ${e.message}`);
+    }
+  }
+
+  async function saveEditorToAsset(){
+    try{
+      const assetKey = (document.getElementById("ae_key").value || "").trim();
+      if (!assetKey) throw new Error("asset_key is empty");
+
+      const tagsRaw = (document.getElementById("ae_tags").value || "").trim();
+      const tags = tagsRaw ? tagsRaw.split(",").map(x=>x.trim()).filter(Boolean) : [];
+
+      const payload = {
+        owner: (document.getElementById("ae_owner").value || "").trim(),
+        team: (document.getElementById("ae_team").value || "").trim(),
+        environment: (document.getElementById("ae_env").value || "").trim(),
+        criticality: (document.getElementById("ae_crit").value || "").trim(),
+        confidentiality_lifetime: (document.getElementById("ae_conf").value || "").trim(),
+        tags,
+        notes: (document.getElementById("ae_notes").value || "").trim(),
+      };
+
+      const saved = await fetchJson(`/assets/${encodeURIComponent(assetKey)}`, {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      });
+      fillAssetEditorFromAsset(saved);
+      setAssetEditorMessage("Saved ✓");
+
+      // Refresh table if a scan is loaded
+      if (typeof currentScanId !== "undefined" && currentScanId){
+        try{ await loadResults(true); }catch(_e){}
+      }
+    }catch(e){
+      setAssetEditorMessage(`Save failed: ${e.message}`);
+    }
+  }
+
+
+
+  function openJson(obj, title="JSON"){
+    const box = document.getElementById("jsonModal");
+    box.style.display = "block";
+    box.innerHTML = `<div class="muted" style="font-size:11px; margin-bottom:8px;">${escapeHtml(title)}</div><pre>${escapeHtml(JSON.stringify(obj, null, 2))}</pre>`;
+  }
+  function closeJson(){
+    const box = document.getElementById("jsonModal");
+    box.style.display = "none";
+    box.innerHTML = "";
+  }
+  function viewJson(){
+    if (!lastResults){
+      alert("No results to show.");
+      return;
+    }
+    const box = document.getElementById("jsonModal");
+    if (box.style.display === "none" || box.style.display === ""){
+      openJson(lastResults, "Results JSON");
+    } else {
+      closeJson();
+    }
+  }
+
+  // ---------- rendering ----------
+  function riskBadge(level){
+    const l = String(level||"").toLowerCase();
+    if (l.includes("critical")) return `<span class="pill bad">CRITICAL</span>`;
+    if (l.includes("high")) return `<span class="pill bad">HIGH</span>`;
+    if (l.includes("medium")) return `<span class="pill warn">MEDIUM</span>`;
+    if (l.includes("low")) return `<span class="pill ok">LOW</span>`;
+    return `<span class="pill">—</span>`;
+  }
+
+  function fmtExpiry(days){
+    if (days === null || days === undefined) return "—";
+    const d = Number(days);
+    if (Number.isNaN(d)) return String(days);
+    if (d < 0) return `${d}d (expired)`;
+    return `${d}d`;
+  }
+
+  function sevClass(sev){
+    const s = String(sev||"").toLowerCase();
+    if (s==="critical" || s==="high") return "bad";
+    if (s==="medium") return "warn";
+    if (s==="low") return "ok";
+    return "";
+  }
+
+  function diffBadgeHtml(r){
+    const d = r && r.__diff;
+    if (!d) return "";
+    if (d.no_baseline) return `<span class="badge warn">NO BASELINE</span>`;
+
+    const delta = (typeof d.score_delta === "number") ? d.score_delta : null;
+    const fmt = (n) => (Math.abs(n) >= 1 ? n.toFixed(1) : n.toFixed(2));
+
+    if (delta !== null && delta > 0) return `<span class="badge bad">REG +${fmt(delta)}</span>`;
+    if (delta !== null && delta < 0) return `<span class="badge ok">IMP ${fmt(delta)}</span>`;
+
+    if (d.new_count > 0) return `<span class="badge bad">REG +${d.new_count}</span>`;
+    if (d.resolved_count > 0) return `<span class="badge ok">IMP -${d.resolved_count}</span>`;
+    return `<span class="badge">UNCHANGED</span>`;
+  }
+
+
+  function assetInventoryHtml(r){
+    const ak = r.asset_key || ((r.host && r.port) ? `${r.host}:${r.port}` : "");
+    const tags = Array.isArray(r.asset_tags) ? r.asset_tags : [];
+    const baseline = (r.baseline && (r.baseline.baseline_scan_id || r.baseline.scan_id)) ? (r.baseline.baseline_scan_id || r.baseline.scan_id) : "";
+    const setAt = r.baseline && r.baseline.set_at ? r.baseline.set_at : "";
+    if (!ak && !r.asset_owner && !r.asset_team && !r.asset_environment && !r.asset_criticality && !tags.length) return "";
+    return `
+      <details>
+        <summary><span>Asset inventory</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>asset_key</div><div class="mono"><strong>${escapeHtml(ak || "—")}</strong></div>
+          <div>owner</div><div class="mono"><strong>${escapeHtml(r.asset_owner || "—")}</strong></div>
+          <div>team</div><div class="mono">${escapeHtml(r.asset_team || "—")}</div>
+          <div>environment</div><div class="mono">${escapeHtml(r.asset_environment || "—")}</div>
+          <div>criticality</div><div class="mono"><strong>${escapeHtml(r.asset_criticality || "—")}</strong></div>
+          <div>confidentiality_lifetime</div><div class="mono">${escapeHtml(r.asset_confidentiality_lifetime || "—")}</div>
+          <div>tags</div><div class="mono">${escapeHtml(tags.join(", ") || "—")}</div>
+          <div>baseline_scan_id</div><div class="mono">${escapeHtml(baseline || "—")}${setAt ? ` <span class="muted">(${escapeHtml(setAt)})</span>`:""}</div>
+        </div>
+      </details>
+    `;
+  }
+
+  function findingsSectionHtml(r){
+    const f = Array.isArray(r.findings) ? r.findings : [];
+    const rows = f.slice(0, 100).map(x => {
+      const sev = x.severity || "";
+      const cls = sevClass(sev);
+      const evidence = x.evidence ? `<details style="margin-top:6px;"><summary><span class="chev">›</span><span>Evidence</span></summary><pre>${escapeHtml(JSON.stringify(x.evidence, null, 2))}</pre></details>` : "";
+      return `
+        <div class="card" style="background: rgba(2,6,23,.22); margin-top:10px; padding:10px; border-radius:14px;">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+            <div class="mono" style="font-weight:700;">${escapeHtml(x.id || "FINDING")}</div>
+            <span class="pill ${cls}">${escapeHtml((sev||"").toUpperCase() || "INFO")}</span>
+          </div>
+          <div class="muted" style="font-size:12px; margin-top:6px;">${escapeHtml(x.title || "")}</div>
+          ${x.remediation ? `<div style="margin-top:8px;"><span class="muted">Fix:</span> ${escapeHtml(x.remediation)}</div>` : ""}
+          ${x.confidence ? `<div style="margin-top:6px;"><span class="muted">Confidence:</span> <span class="mono">${escapeHtml(x.confidence)}</span> — ${escapeHtml(x.confidence_reason || "")}</div>` : ""}
+          ${evidence}
+        </div>
+      `;
+    }).join("");
+    return `
+      <details open>
+        <summary><span>Findings</span><span class="chev">›</span></summary>
+        ${rows || `<div class="muted" style="margin-top:10px;">No findings.</div>`}
+      </details>
+    `;
+  }
+
+  function reachabilityTable(entries){
+    const list = Array.isArray(entries) ? entries : [];
+    if (!list.length) return `<div class="muted" style="margin-top:10px">No probe data.</div>`;
+    const rows = list.map(e => {
+      const ok = !!e.reachable;
+      const code = (e.status_code === null || e.status_code === undefined) ? "" : String(e.status_code);
+      const ms = (e.elapsed_ms === null || e.elapsed_ms === undefined) ? "" : String(e.elapsed_ms) + "ms";
+      const method = e.method || "";
+      const err = e.error || "";
+      const statusTag = ok ? `<span class="pill ok">reachable</span>` : `<span class="pill bad">unreachable</span>`;
+      return `
+        <tr>
+          <td class="mono" style="max-width:420px; overflow:hidden; text-overflow:ellipsis">${escapeHtml(e.url || "")}</td>
+          <td>${statusTag}</td>
+          <td class="mono">${escapeHtml(code)}</td>
+          <td class="mono">${escapeHtml(method)}</td>
+          <td class="mono">${escapeHtml(ms)}</td>
+          <td class="mono" style="max-width:260px; overflow:hidden; text-overflow:ellipsis">${escapeHtml(err)}</td>
+        </tr>`;
+    }).join("");
+    return `
+      <div style="overflow:auto; margin-top:10px;">
+        <table class="miniTable">
+          <thead><tr><th>url</th><th>status</th><th>http</th><th>method</th><th>time</th><th>error</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }
+
+  function tlsSessionHtml(r){
+    const supported = Array.isArray(r.tls_supported_versions) ? r.tls_supported_versions : [];
+    const weak = Array.isArray(r.tls12_weak_accepted_ciphers) ? r.tls12_weak_accepted_ciphers : [];
+    const accepted = Array.isArray(r.tls12_accepted_ciphers) ? r.tls12_accepted_ciphers : [];
+    const probeErrors = r.tls_probe_errors || {};
+    return `
+      <details>
+        <summary><span>TLS session & config</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>negotiated_tls</div><div class="mono"><strong>${escapeHtml(r.tls_version || "—")}</strong></div>
+          <div>cipher</div><div class="mono"><strong>${escapeHtml(r.cipher_name || "—")}</strong>${r.cipher_bits ? ` <span class="muted">(${escapeHtml(r.cipher_bits)}b)</span>` : ""}</div>
+          <div>ALPN</div><div class="mono"><strong>${escapeHtml(r.alpn || "—")}</strong></div>
+          <div>supported_versions</div><div class="mono">${escapeHtml(supported.join(", ") || "—")}</div>
+          <div>forward_secrecy_possible</div><div class="mono">${escapeHtml(String(!!r.forward_secrecy_possible))}</div>
+          <div>tls12_accepted_ciphers</div><div class="mono">${escapeHtml(accepted.length ? `${accepted.length} probed` : "—")}</div>
+          <div>tls12_weak_accepted</div><div class="mono">${escapeHtml(weak.length ? `${weak.length}: ${weak.slice(0,8).join(", ")}${weak.length>8?"…":""}` : "—")}</div>
+          <div>verify_mode</div><div class="mono"><strong>${escapeHtml(r.verify_mode || "—")}</strong></div>
+          <div>verify_reason</div><div class="mono">${escapeHtml(r.verify_reason || "—")}</div>
+          <div>verify_error</div><div class="mono">${escapeHtml(r.verify_error || "—")}</div>
+        </div>
+        ${Object.keys(probeErrors || {}).length ? `<pre>${escapeHtml(JSON.stringify(probeErrors, null, 2))}</pre>` : ""}
+      </details>`;
+  }
+
+  function certExtensionsHtml(r){
+    const san = r.san_dns || [];
+    const ku = r.key_usage || {};
+    const eku = r.eku || [];
+    const ocsp = r.ocsp_urls || [];
+    const crl = r.crl_urls || [];
+    const cai = r.ca_issuers_urls || [];
+    const bc = r.basic_constraints || {};
+    const kuList = Object.keys(ku).filter(k=>ku[k]);
+    const bcTxt = (bc && Object.keys(bc).length) ? JSON.stringify(bc) : "";
+    return `
+      <details>
+        <summary><span>Certificate extensions</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>subject</div><div class="mono"><strong>${escapeHtml(r.subject || "")}</strong></div>
+          <div>issuer</div><div class="mono"><strong>${escapeHtml(r.issuer || "")}</strong></div>
+          <div>validity</div><div class="mono">${escapeHtml(r.not_before || "")} → ${escapeHtml(r.not_after || "")}</div>
+          <div>SAN (DNS)</div><div class="mono">${escapeHtml(san.join(", ") || "—")}</div>
+          <div>KeyUsage</div><div class="mono">${escapeHtml(kuList.join(", ") || "—")}</div>
+          <div>EKU</div><div class="mono">${escapeHtml(eku.join(", ") || "—")}</div>
+          <div>BasicConstraints</div><div class="mono">${escapeHtml(bcTxt || "—")}</div>
+          <div>OCSP URLs (AIA)</div><div class="mono">${escapeHtml(ocsp.join(", ") || "—")}</div>
+          <div>CA Issuers (AIA)</div><div class="mono">${escapeHtml(cai.join(", ") || "—")}</div>
+          <div>CRL URLs</div><div class="mono">${escapeHtml(crl.join(", ") || "—")}</div>
+        </div>
+      </details>`;
+  }
+
+  function revocationHtml(r){
+    const ocspUrls = Array.isArray(r.ocsp_urls) ? r.ocsp_urls : [];
+    const crlUrls = Array.isArray(r.crl_urls) ? r.crl_urls : [];
+    const ocspReach = r.ocsp_reachability || [];
+    const crlReach = r.crl_reachability || [];
+    const stapled = !!r.ocsp_stapled;
+    const status = (r.ocsp_stapled_status || "").toLowerCase();
+    let stapledTxt = "not observed";
+    if (stapled){
+      stapledTxt = status ? `present (${status})` : "present";
+    }
+    return `
+      <details>
+        <summary><span>Revocation posture (OCSP / CRL)</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>OCSP AIA URLs</div><div class="mono">${escapeHtml(ocspUrls.join(", ") || "—")}</div>
+          <div>CRL URLs</div><div class="mono">${escapeHtml(crlUrls.join(", ") || "—")}</div>
+          <div>OCSP stapling</div><div class="mono"><strong>${escapeHtml(stapledTxt)}</strong></div>
+          <div>thisUpdate</div><div class="mono">${escapeHtml(r.ocsp_stapled_this_update || "—")}</div>
+          <div>nextUpdate</div><div class="mono">${escapeHtml(r.ocsp_stapled_next_update || "—")}</div>
+        </div>
+        <details style="margin-top:10px;">
+          <summary><span>OCSP endpoint reachability</span><span class="chev">›</span></summary>
+          ${reachabilityTable(ocspReach)}
+        </details>
+        <details style="margin-top:10px;">
+          <summary><span>CRL endpoint reachability</span><span class="chev">›</span></summary>
+          ${reachabilityTable(crlReach)}
+        </details>
+      </details>`;
+  }
+
+  function chainHtml(r){
+    const chain = r.cert_chain || [];
+    const rows = chain.map(c => {
+      const key = c.key || ((c.key_type||"") + (c.key_detail ? " / " + c.key_detail : ""));
+      const sig = c.sig || c.sig_algorithm || "";
+      const fp = (c.fingerprint_sha256 || c.serial_hex || c.fingerprint || "");
+      return `
+        <tr>
+          <td class="mono">${escapeHtml(c.index ?? "")}</td>
+          <td>${escapeHtml(c.subject || "")}</td>
+          <td>${escapeHtml(c.issuer || "")}</td>
+          <td class="mono">${escapeHtml(c.not_before || "")}</td>
+          <td class="mono">${escapeHtml(c.not_after || "")}</td>
+          <td class="mono">${escapeHtml(key || "")}</td>
+          <td class="mono">${escapeHtml(sig || "")}</td>
+          <td class="mono">${escapeHtml((fp || "").slice(0, 18))}${fp ? "…" : ""}</td>
+        </tr>`;
+    }).join("");
+
+    return `
+      <details>
+        <summary><span>Certificate chain</span><span class="chev">›</span></summary>
+        <div class="kvs">
+          <div>chain_length</div><div class="mono"><strong>${escapeHtml(r.chain_length ?? "")}</strong></div>
+          <div>chain_issues</div><div class="mono"><strong>${escapeHtml(Array.isArray(r.chain_issues) ? r.chain_issues.join(", ") : (r.chain_issues ?? ""))}</strong></div>
+          <div>chain_source</div><div class="mono"><strong>${escapeHtml(r.chain_source || "")}</strong></div>
+          <div>confidence</div><div class="mono">${escapeHtml(r.chain_confidence || "")}</div>
+        </div>
+        <div style="overflow:auto; margin-top:10px;">
+          <table>
+            <thead><tr><th>#</th><th>subject</th><th>issuer</th><th>not_before</th><th>not_after</th><th>key</th><th>sig</th><th>fp/serial</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="8" class="muted">No chain details returned.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </details>`;
+  }
+
+  function detailsHtml(r){
+    return `
+      ${assetInventoryHtml(r)}
+      ${findingsSectionHtml(r)}
+      ${tlsSessionHtml(r)}
+      ${certExtensionsHtml(r)}
+      ${revocationHtml(r)}
+      ${chainHtml(r)}
+    `;
+  }
+
+  function rowHtml(r, idx){
+    const hp = `${r.host || ""}`;
+    const tls = r.tls_version || "—";
+    const key = (r.key_type || "—") + (r.key_detail ? " / " + r.key_detail : "");
+    const sig = r.sig_algorithm || "—";
+    const exp = fmtExpiry(r.days_until_expiry);
+    const risk = riskBadge(r.risk || r.risk_level || "low");
+    const pqc = (r.pqc_relevance || "—");
+    const pqcRec = r.pqc_recommendation || "";
+
+    const tlsSub = [
+      r.alpn ? `ALPN:${r.alpn}` : "",
+      r.cipher_name ? r.cipher_name : "",
+      r.cipher_bits ? `${r.cipher_bits}b` : ""
+    ].filter(Boolean).join(" • ");
+
+    return `
+      <tr>
+        <td>
+          <details>
+            <summary><span class="chev">›</span>${diffBadgeHtml(r)}</summary>
+            ${detailsHtml(r)}
+          </details>
+        </td>
+        <td class="mono assetLink" data-asset="${escapeHtml(hp)}:${escapeHtml(r.port)}" title="Click to load asset editor">${escapeHtml(hp)}</td>
+        <td class="mono">${escapeHtml(r.port)}</td>
+        <td>
+          <div class="cellStack">
+            <div class="mono">${escapeHtml(tls)}</div>
+            ${tlsSub ? `<div class="cellSub">${escapeHtml(tlsSub)}</div>` : `<div class="cellSub">—</div>`}
+          </div>
+        </td>
+        <td class="mono">${escapeHtml(key)}</td>
+        <td class="mono">${escapeHtml(sig)}</td>
+        <td class="mono">${escapeHtml(exp)}</td>
+        <td>${risk}</td>
+        <td>
+          <div class="cellStack">
+            <div class="mono">${escapeHtml(pqc)}</div>
+            ${pqcRec ? `<div class="cellSub">${escapeHtml(pqcRec)}</div>` : `<div class="cellSub">—</div>`}
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderResults(results){
+    const body = document.getElementById("resultsBody");
+    const info = document.getElementById("resultsInfo");
+    if (info) info.textContent = `Loaded ${results.length} result(s)`;
+    if (!body) return;
+    if (!results.length){
+      body.innerHTML = `<tr><td colspan="9" class="muted">No results yet.</td></tr>`;
+      return;
+    }
+    body.innerHTML = results.map((r,i)=>rowHtml(r,i)).join("");
+    // Wire asset editor link clicks
+    document.querySelectorAll(".assetLink").forEach(el=>{
+      el.addEventListener("click", ()=>{
+        const k = el.getAttribute("data-asset") || "";
+        const keyInput = document.getElementById("ae_key");
+        if (keyInput) keyInput.value = k;
+        if (typeof loadAssetIntoEditor === "function") loadAssetIntoEditor(k);
+      });
+    });
+  }
+
+  // ---------- Sprint 2: baseline & diff observable ----------
+  let lastDiff = null;
+  let diffFilterMode = "all"; // all | reg | imp
+  function setBaselineButtonsEnabled(on){
+    document.getElementById("baselineBtn").disabled = !on;
+    document.getElementById("diffBtn").disabled = !on;
+  }
+  function saveBaselineInfo(scanId){
+    try{
+      localStorage.setItem("pqc_baseline_info", JSON.stringify({scan_id: scanId, set_at: new Date().toISOString()}));
+    }catch(e){}
+    renderBaselineIndicator();
+  }
+  function renderBaselineIndicator(){
+    const el = document.getElementById("baselineIndicator");
+    const t = document.getElementById("baselineText");
+    let info = null;
+    try{ info = JSON.parse(localStorage.getItem("pqc_baseline_info") || "null"); }catch(e){ info=null; }
+    if (!info || !info.scan_id){
+      el.style.display = "none";
+      t.textContent = "";
+      return;
+    }
+    el.style.display = "block";
+    t.textContent = `scan_id=${info.scan_id} • set_at=${info.set_at || ""}`;
+  }
+  function normalizeDiffPayload(d){
+    if (!d) return [];
+    if (Array.isArray(d)) return d;
+    if (Array.isArray(d.assets)) return d.assets;
+    if (Array.isArray(d.results)) return d.results;
+    if (Array.isArray(d.diff)) return d.diff;
+    return [];
+  }
+  function keyForRow(r){
+    const h = r.host || "";
+    const p = r.port != null ? String(r.port) : "443";
+    return `${h}:${p}`;
+  }
+  function applyDiffBadges(){
+    if (!lastResults) return;
+    const rows = (lastResults.results || lastResults || []);
+    const diffArr = normalizeDiffPayload(lastDiff);
+    const map = new Map();
+    for (const d of diffArr){
+      const k = d.asset_key || d.key || d.asset || "";
+      map.set(k, d);
+    }
+    for (const r of rows){
+      const k = keyForRow(r);
+      const d = map.get(k);
+      if (!d) { r.__diff = null; continue; }
+
+      const newF = Array.isArray(d.new_findings) ? d.new_findings : [];
+      const resF = Array.isArray(d.resolved_findings) ? d.resolved_findings : [];
+      const unch = Array.isArray(d.unchanged_findings) ? d.unchanged_findings : [];
+
+      // Prefer explicit flags from API if present. Otherwise infer from baseline info.
+      const hasBaseline =
+        (d.no_baseline === false) ||
+        !!d.baseline_scan_id ||
+        (d.baseline && (d.baseline.score !== null && d.baseline.score !== undefined)) ||
+        (d.baseline && (d.baseline.level !== null && d.baseline.level !== undefined));
+
+      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || !hasBaseline;
+
+      const delta = (typeof d.score_delta === "number") ? d.score_delta : (
+        (d.current && typeof d.current.score === "number" && d.baseline && typeof d.baseline.score === "number")
+          ? (d.current.score - d.baseline.score)
+          : null
+      );
+
+      r.__diff = { new_count: newF.length, resolved_count: resF.length, no_baseline: nb, score_delta: delta };
+    }
+  }
+  function renderDiffPanel(){
+    const panel = document.getElementById("diffPanel");
+    const list = document.getElementById("diffList");
+    const diffArr = normalizeDiffPayload(lastDiff);
+
+    if (!diffArr.length){
+      panel.style.display = "none";
+      list.innerHTML = "";
+      return;
+    }
+    panel.style.display = "block";
+
+    let reg=0, imp=0, same=0, nob=0;
+    const cards = [];
+    for (const d of diffArr){
+      const asset = d.asset_key || d.key || d.asset || "—";
+      const newF = Array.isArray(d.new_findings) ? d.new_findings : [];
+      const resF = Array.isArray(d.resolved_findings) ? d.resolved_findings : [];
+      const unch = Array.isArray(d.unchanged_findings) ? d.unchanged_findings : [];
+
+      const hasBaseline =
+        (d.no_baseline === false) ||
+        !!d.baseline_scan_id ||
+        (d.baseline && (d.baseline.score !== null && d.baseline.score !== undefined)) ||
+        (d.baseline && (d.baseline.level !== null && d.baseline.level !== undefined));
+
+      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || !hasBaseline;
+
+      const delta = (typeof d.score_delta === "number") ? d.score_delta : (
+        (d.current && typeof d.current.score === "number" && d.baseline && typeof d.baseline.score === "number")
+          ? (d.current.score - d.baseline.score)
+          : null
+      );
+
+      const isReg = !nb && ((newF.length>0) || (delta !== null && delta > 0));
+      const isImp = !nb && ((resF.length>0) || (delta !== null && delta < 0));
+      const isSame = !nb && !isReg && !isImp;
+
+      if (nb) nob++;
+      else if (isReg) reg++;
+      else if (isImp) imp++;
+      else same++;
+
+      if (diffFilterMode === "reg" && !isReg) continue;
+      if (diffFilterMode === "imp" && !isImp) continue;
+
+      const fmt = (n) => (Math.abs(n) >= 1 ? n.toFixed(1) : n.toFixed(2));
+      const deltaHtml = (delta === null) ? "" : `<span class="pill">${delta>0?"+":""}${fmt(delta)}</span>`;
+
+      const tag = nb ? `<span class="pill warn">No baseline</span>` :
+                 (isReg ? `<span class="pill bad">Regression</span>` :
+                 (isImp ? `<span class="pill ok">Improvement</span>` :
+                          `<span class="pill">Unchanged</span>`));
+
+      const details = `
+        <div class="kvs">
+          <div>asset_key</div><div class="mono"><strong>${escapeHtml(asset)}</strong></div>
+          <div>new_findings</div><div class="mono">${escapeHtml(String(newF.length))}</div>
+          <div>resolved_findings</div><div class="mono">${escapeHtml(String(resF.length))}</div>
+          <div>unchanged_findings</div><div class="mono">${escapeHtml(String(unch.length))}</div>
+        </div>
+      `;
+
+      cards.push(`
+        <div class="diffItem">
+          <div class="diffHead">
+            <div class="mono">${escapeHtml(asset)}</div>
+            <div class="row" style="gap:8px; align-items:center;">${tag}${deltaHtml}</div>
+          </div>
+          <details style="margin-top:8px;">
+            <summary>Details</summary>
+            ${details}
+          </details>
+        </div>
+      `);
+    }
+
+    document.getElementById("regCount").textContent = `Regressions: ${reg}`;
+    document.getElementById("impCount").textContent = `Improvements: ${imp}`;
+    document.getElementById("nobCount").textContent = `No baseline: ${nob}`;
+    document.getElementById("sameCount").textContent = `Unchanged: ${same}`;
+    list.innerHTML = cards.join("") || `<div class="muted">No items for this filter.</div>`;
+  }
+
+  
+  // ---------- Sprint 4: Fix Next ----------
+  let lastFixNext = null;
+
+  function setFixNextMessage(msg){
+    const el = document.getElementById("fn_msg");
+    if (el) el.textContent = msg || "";
+  }
+
+  function severityPill(sev){
+    const s = String(sev||"").toLowerCase();
+    if (s==="critical" || s==="high") return `<span class="pill bad">${escapeHtml(String(sev||"").toUpperCase())}</span>`;
+    if (s==="medium") return `<span class="pill warn">${escapeHtml(String(sev||"").toUpperCase())}</span>`;
+    if (s==="low") return `<span class="pill ok">${escapeHtml(String(sev||"").toUpperCase())}</span>`;
+    return `<span class="pill">${escapeHtml(String(sev||"").toUpperCase() || "INFO")}</span>`;
+  }
+
+  function renderFixNext(data){
+    const out = document.getElementById("fn_out");
+    if (!out) return;
+
+    const items = (data && data.items) ? data.items : [];
+    if (!items.length){
+      out.innerHTML = `<div class="muted">No actionable items returned. Try scanning endpoints with obvious issues (e.g., expired.badssl.com, incomplete-chain.badssl.com).</div>`;
+      return;
+    }
+
+    const cards = items.slice(0, 30).map(it=>{
+      const tags = Array.isArray(it.tags) ? it.tags : [];
+      const tf = Array.isArray(it.top_findings) ? it.top_findings : [];
+      const meta = [
+        it.owner ? `owner:${it.owner}` : "",
+        it.team ? `team:${it.team}` : "",
+        it.environment ? `env:${it.environment}` : "",
+        it.criticality ? `crit:${it.criticality}` : "",
+        tags.length ? `tags:${tags.join(",")}` : "",
+      ].filter(Boolean);
+
+      const findingList = tf.length ? `
+        <div class="fnFind">
+          <div class="muted" style="font-size:11px;">Top findings</div>
+          <ul>
+            ${tf.map(f=>`<li><span class="mono">${escapeHtml(f.id||"")}</span> ${severityPill(f.severity)}<div class="muted" style="margin-top:2px;">${escapeHtml(f.title||"")}</div>${f.remediation?`<div class="muted" style="margin-top:2px;">Fix: ${escapeHtml(f.remediation)}</div>`:""}</li>`).join("")}
+          </ul>
+        </div>` : `<div class="muted" style="margin-top:10px;">No findings in item.</div>`;
+
+      return `
+        <div class="fnCard">
+          <div class="fnHead">
+            <div class="fnAsset">${escapeHtml(it.asset_key || "")}</div>
+            <span class="pill">${escapeHtml(String(it.priority_score ?? ""))}</span>
+          </div>
+          <div class="fnMeta">
+            ${meta.map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join("")}
+          </div>
+          ${findingList}
+        </div>
+      `;
+    }).join("");
+
+    out.innerHTML = `<div class="fnGrid">${cards}</div>`;
+  }
+
+  async function loadFixNext(){
+    try{
+      const panel = document.getElementById("fixNextPanel");
+      if (!panel) return;
+
+      const sid = currentScanId ? String(currentScanId) : "";
+      setFixNextMessage("Loading…");
+      const q = sid ? `?scan_id=${encodeURIComponent(sid)}` : "";
+      const data = await fetchJson(`/fix-next${q}`);
+      lastFixNext = data;
+      setFixNextMessage(`Scan: ${escapeHtml(String(data.scan_id||sid||"latest"))} • Items: ${escapeHtml(String((data.items||[]).length))}`);
+      renderFixNext(data);
+    }catch(e){
+      setFixNextMessage(`Fix Next error: ${e.message}`);
+      const out = document.getElementById("fn_out");
+      if (out) out.innerHTML = `<div class="muted">Could not load Fix Next.</div>`;
+    }
+  }
+
+  function toggleFixNext(forceOpen=false){
+    const panel = document.getElementById("fixNextPanel");
+    if (!panel) return;
+    const open = forceOpen || (panel.style.display === "none" || panel.style.display === "");
+    if (open){
+      panel.style.display = "block";
+      const out = document.getElementById("fn_out");
+      if (out) out.innerHTML = `<div class="muted">Loading…</div>`;
+      loadFixNext();
+    } else {
+      panel.style.display = "none";
+    }
+  }
+
+// ---------- scanning ----------
+  let currentScanId = null;
+  let lastResults = null;
+  let pollTimer = null;
+
+  function stopPolling(){
+    if (pollTimer){
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function loadResults(allowPartial=true){
+    if (!currentScanId) return;
+    try{
+      const data = await fetchJson(`/scans/${currentScanId}/results`);
+      lastResults = data;
+      // clear diff when loading new results (unless diff just fetched)
+      if (!allowPartial){
+        // keep lastDiff as-is
+      }
+      const rows = data.results || [];
+      applyDiffBadges();
+      renderResults(rows);
+      document.getElementById("jsonBtn").disabled = rows.length === 0;
+      document.getElementById("planBtn").disabled = rows.length === 0;
+      const db = document.getElementById("dashBtn");
+      if (db) db.disabled = rows.length === 0;
+      const fx = document.getElementById("fixNextBtn");
+      if (fx) fx.disabled = rows.length === 0;
+      setBaselineButtonsEnabled(rows.length !== 0);
+    }catch(e){
+      // during running, results may not yet exist: show status but don't break UI
+      if (!allowPartial){
+        setStatus(`Results error: ${e.message}`, "warn");
+      }
+    }
+  }
+
+  function startPolling(){
+    stopPolling();
+    if (!currentScanId) return;
+
+    const tick = async () => {
+      try{
+        const st = await fetchJson(`/scans/${currentScanId}`);
+        setProgress(st.progress);
+        const kind = (st.status === "failed") ? "bad" : ((st.status === "completed" || st.status === "done") ? "ok" : "");
+        setStatus(st.status, kind);
+
+        if (st.status === "running"){
+          // keep table updated while running
+          await loadResults(true);
+        }
+
+        if (st.status === "completed" || st.status === "done" || st.status === "failed"){
+          stopPolling();
+          await loadResults(false);
+        }
+      }catch(e){
+        setStatus(`Polling error: ${e.message}`, "warn");
+      }
+    };
+
+    tick();
+    pollTimer = setInterval(tick, 1000);
+  }
+
+  async function startScan(){
+    closeJson();
+    // reset UI
+    lastDiff = null;
+    diffFilterMode = "all";
+    renderDiffPanel();
+    renderResults([]);
+    setBaselineButtonsEnabled(false);
+    document.getElementById("planBtn").disabled = true;
+    const fx = document.getElementById("fixNextBtn");
+    if (fx) fx.disabled = true;
+    document.getElementById("jsonBtn").disabled = true;
+    setProgress({total:0, done:0, percent:0});
+    setStatus("starting");
+
+    saveTargetsToStorage();
+    const raw = document.getElementById("targets").value || "";
+    const targets = raw.split("\n").map(x=>x.trim()).filter(Boolean);
+    if (!targets.length){
+      alert("Please enter at least one target.");
+      setStatus("Ready");
+      return;
+    }
+    try{
+      const created = await fetchJson(`/scans`, {
+        method:"POST",
+        body: JSON.stringify({targets})
+      });
+      currentScanId = created.id;
+      saveLastScanId(currentScanId);
+      setStatus("running");
+      startPolling();
+    }catch(e){
+      setStatus(`Start failed: ${e.message}`, "bad");
+    }
+  }
+
+  async function loadLastScan(){
+    closeJson();
+    try{
+      const scans = await fetchJson(`/scans?limit=1`);
+      if (!Array.isArray(scans) || !scans.length){
+        alert("No scans found.");
+        return;
+      }
+      currentScanId = scans[0].id;
+      saveLastScanId(currentScanId);
+      setStatus("loaded");
+      // load status + results
+      startPolling();
+      await loadResults(true);
+    }catch(e){
+      setStatus(`Load failed: ${e.message}`, "bad");
+    }
+  }
+
+  async function viewPlan(){
+    if (!currentScanId){
+      alert("No scan loaded.");
+      return;
+    }
+    try{
+      const plan = await fetchJson(`/scans/${currentScanId}/migration-plan`);
+      openJson(plan, "Migration Plan");
+    }catch(e){
+      alert(`Plan error: ${e.message}`);
+    }
+  }
+
+  async function setBaseline(){
+    if (!currentScanId){
+      alert("No scan loaded.");
+      return;
+    }
+    const ok = confirm("Set this scan as baseline for all assets in its results?");
+    if (!ok) return;
+    try{
+      await fetchJson(`/baselines/from-scan/${currentScanId}`, {method:"POST"});
+      saveBaselineInfo(currentScanId);
+      setStatus("baseline set", "ok");
+    }catch(e){
+      setStatus(`Baseline error: ${e.message}`, "bad");
+    }
+  }
+
+  async function diffVsBaseline(){
+    if (!currentScanId){
+      alert("No scan loaded.");
+      return;
+    }
+    try{
+      const diff = await fetchJson(`/scans/${currentScanId}/diff`);
+      lastDiff = diff;
+      applyDiffBadges();
+      renderDiffPanel();
+      // re-render table to show badges
+      const rows = lastResults?.results || [];
+      renderResults(rows);
+      openJson(diff, "Diff vs Baseline (raw)");
+    }catch(e){
+      setStatus(`Diff error: ${e.message}`, "bad");
+    }
+  }
+
+  function wireDiffPanelButtons(){
+  click("filterAllBtn", () => {
+    diffFilterMode = "all";
+    renderDiffPanel();
+    renderResults(lastResults?.results || []);
+  });
+
+  click("filterRegBtn", () => {
+    diffFilterMode = "reg";
+    renderDiffPanel();
+    renderResults(
+      (lastResults?.results || []).filter(r =>
+        r.__diff && !r.__diff.no_baseline && (r.__diff.new_count > 0 || (typeof r.__diff.score_delta === "number" && r.__diff.score_delta > 0))
+      )
+    );
+  });
+
+  click("filterImpBtn", () => {
+    diffFilterMode = "imp";
+    renderDiffPanel();
+    renderResults(
+      (lastResults?.results || []).filter(r =>
+        r.__diff && !r.__diff.no_baseline && (r.__diff.resolved_count > 0 || (typeof r.__diff.score_delta === "number" && r.__diff.score_delta < 0))
+      )
+    );
+  });
+
+  click("clearDiffBtn", () => {
+    lastDiff = null;
+    diffFilterMode = "all";
+    renderDiffPanel();
+    applyDiffBadges();
+    renderResults(lastResults?.results || []);
+    closeJson();
+  });
+}
+
+
+  function init(){
+    document.getElementById("apiBase").value = API_BASE;
+    document.getElementById("apiBaseLabel").textContent = API_BASE;
+    const d = document.getElementById("dashBtn");
+    if (d) d.disabled = false;
+
+    // Restore targets + autoload preference
+    loadTargetsFromStorage();
+    const ck = document.getElementById("autoLoadCk");
+    if (ck){ ck.checked = isAutoLoadEnabled(); ck.onchange = ()=> setAutoLoadEnabled(ck.checked); }
+
+
+    document.getElementById("apiBase").addEventListener("change", (e)=>{
+      API_BASE = e.target.value.trim() || API_DEFAULT;
+      localStorage.setItem("pqc_api_base", API_BASE);
+      document.getElementById("apiBaseLabel").textContent = API_BASE;
+    });
+
+    click("startBtn", startScan);
+    click("collectionsBtn", openCollections);
+    click("schedulesBtn", openSchedules);
+    click("exportBtn", exportCsv);
+    const dashBtn = document.getElementById("dashBtn");
+    if (dashBtn) dashBtn.onclick = openDashboard;
+
+
+    const ta = document.getElementById("targets");
+    if (ta){ ta.addEventListener("input", saveTargetsToStorage); }
+
+    click("loadLastBtn", loadLastScan);
+    click("jsonBtn", viewJson);
+    click("planBtn", viewPlan);
+    const fxBtn = document.getElementById("fixNextBtn");
+    if (fxBtn) fxBtn.onclick = ()=> toggleFixNext(true);
+    const fxRef = document.getElementById("fixNextRefreshBtn");
+    if (fxRef) fxRef.onclick = loadFixNext;
+    const fxClose = document.getElementById("fixNextCloseBtn");
+    if (fxClose) fxClose.onclick = ()=> toggleFixNext(false);
+    click("baselineBtn", setBaseline);
+    click("diffBtn", diffVsBaseline);
+    wireDiffPanelButtons();
+    renderBaselineIndicator();
+
+    // Asset editor wiring
+    const aeLoad = document.getElementById("ae_load");
+    const aeSave = document.getElementById("ae_save");
+    if (aeLoad) aeLoad.onclick = ()=> loadAssetIntoEditor((document.getElementById("ae_key").value||"").trim());
+    if (aeSave) aeSave.onclick = saveEditorToAsset;
+    const histBtn = document.getElementById("ae_history");
+    if (histBtn) histBtn.onclick = showAssetHistory;
+
+    // Collections modal wiring
+    click("collectionsBtn", openCollections);
+    click("collectionsCloseBtn", closeCollections);
+    on("collectionsBackdrop", "click", closeCollections);
+    click("coll_refresh", loadCollections);
+    click("coll_save", saveCollection);
+    click("coll_load", loadSelectedCollectionIntoForm);
+    click("coll_apply", applyCollectionToTargets);
+    click("coll_scan", scanSelectedCollection);
+    click("coll_delete", deleteSelectedCollection);
+
+    // Schedules modal wiring
+    click("schedulesBtn", openSchedules);
+    click("schedulesCloseBtn", closeSchedules);
+    on("schedulesBackdrop", "click", closeSchedules);
+    click("sch_refresh", loadSchedules);
+    click("sch_create", createScheduleFromForm);
+
+    
+
+  async function openDashboardSafe(){
+    try{
+      // If no scan loaded (refresh, scheduled runs), load latest scan automatically
+      if (!currentScanId){
+        setStatus("loading latest scan…", "warn");
+        await loadLastScan();
+      }
+
+    // wireCloseButtonsSprint6
+    try{
+      const cb = document.getElementById("collectionsBackdrop");
+      const sb = document.getElementById("schedulesBackdrop");
+      const db = document.getElementById("dashBackdrop");
+
+      const cClose = document.getElementById("collectionsCloseBtn");
+      const sClose = document.getElementById("schedulesCloseBtn");
+      const dClose = document.getElementById("dashCloseBtn");
+
+      if (cClose) cClose.onclick = closeCollections;
+      if (sClose) sClose.onclick = closeSchedules;
+      if (dClose) dClose.onclick = closeDashboard;
+
+      if (cb) cb.addEventListener("click", closeCollections);
+      if (sb) sb.addEventListener("click", closeSchedules);
+      if (db) db.addEventListener("click", closeDashboard);
+    }catch(e){
+      console.warn("close wiring failed", e);
+    }
+
+      // Ensure results are loaded so the dashboard has data
+      await loadResults(true);
+      await openDashboard();
+    }catch(e){
+      alert(`Dashboard error: ${e.message}`);
+      setStatus("dashboard error", "bad");
+    }
+  }
+
+// Dashboard modal wiring
+    click("dashCloseBtn", closeDashboard);
+    on("dashBackdrop", "click", closeDashboard);
+    click("dash_refresh", loadDashboardOverview);
+    click("trend_refresh", loadDashboardTrend);
+    click("dash_save_view", saveDashView);
+    click("dash_load_view", loadDashView);
+    click("dash_delete_view", deleteDashView);
+
+
+
+
+    // Hard reset UI on refresh (your earlier issue)
+    setProgress({total:0, done:0, percent:0});
+    setStatus("Ready");
+    renderResults([]);
+    setBaselineButtonsEnabled(false);
+    closeJson();
+
+    // Optional: auto-load last scan on refresh
+    const lastId = getLastScanId();
+    if (isAutoLoadEnabled() && lastId){
+      currentScanId = lastId;
+      setStatus("autoloading", "warn");
+      startPolling();
+      loadResults(true);
+    }
+
+    window.addEventListener("error", (ev)=>{
+      setStatus(`UI error: ${ev.message || "unknown"}`, "bad");
+    });
+  }
+
+  init();
+
+
+  // -----------------------------
+  // Sprint 6: Dashboard (overview + trends)
+  // -----------------------------
+  const LS_DASH_VIEWS_KEY = "pqc_dash_views_v1";
+
+  function setDashMsg(msg){ const el=document.getElementById("dash_msg"); if(el) el.textContent=msg||""; }
+
+  function openDashboard(){
+    if (!currentScanId){
+      alert("Run or load a scan first.");
+      return;
+    }
+    const b = document.getElementById("dashBackdrop");
+    if (!b) return;
+    b.style.display = "flex";
+    setStatus("Dashboard opened", "ok");
+    refreshDashViews();
+    loadDashboardOverview();
+  }
+  function closeDashboard(){
+    const b = document.getElementById("dashBackdrop");
+    if (!b) return;
+    b.style.display = "none";
+  }
+
+  function dashFilters(){
+    return {
+      owner: (document.getElementById("dash_owner").value || "").trim(),
+      team: (document.getElementById("dash_team").value || "").trim(),
+      environment: (document.getElementById("dash_env").value || "").trim(),
+      criticality: (document.getElementById("dash_crit").value || "").trim(),
+    };
+  }
+
+  async function loadDashboardOverview(){
+    try{
+      if (!currentScanId) return;
+      setDashMsg("Loading overview…");
+      const f = dashFilters();
+      const qs = new URLSearchParams(f);
+      const data = await fetchJson(`/metrics/scan/${encodeURIComponent(currentScanId)}/overview?` + qs.toString());
+      const c = data.counts || {};
+      const top = data.top_assets || [];
+
+      const lines = [];
+      lines.push(`<div><b>Assets:</b> ${c.assets_total ?? 0} • <b>With findings:</b> ${c.assets_with_findings ?? 0}</div>`);
+
+      function kv(obj){
+        const entries = Object.entries(obj || {});
+        if (!entries.length) return "<span class='muted'>—</span>";
+        return entries.map(([k,v])=>`<span class="pill">${escapeHtml(k)}: ${v}</span>`).join(" ");
+      }
+      lines.push(`<div style="margin-top:8px;"><b>Risk:</b> ${kv(c.risk_levels)}</div>`);
+      lines.push(`<div style="margin-top:8px;"><b>PQC relevance:</b> ${kv(c.pqc_relevance)}</div>`);
+      lines.push(`<div style="margin-top:8px;"><b>TLS versions:</b> ${kv(c.tls_versions)}</div>`);
+      lines.push(`<div style="margin-top:8px;"><b>Key types:</b> ${kv(c.key_types)}</div>`);
+
+      lines.push(`<div style="margin-top:10px;"><b>Top assets</b></div>`);
+      if (!top.length){
+        lines.push(`<div class="muted">No assets found for this filter.</div>`);
+      } else {
+        lines.push(`<div style="overflow:auto; border:1px solid rgba(148,163,184,.12); border-radius:12px; padding:10px; margin-top:6px;">
+          ${top.slice(0,20).map(a=>{
+            return `<div style="padding:6px 0; border-top:1px solid rgba(148,163,184,.10);">
+              <div><b>${escapeHtml(a.asset_key||"")}</b> • score ${Number(a.quantum_score||0).toFixed(1)} • findings ${a.findings_count||0} • <span class="pill">${escapeHtml(a.risk_level||"")}</span></div>
+              <div class="muted" style="font-size:11px;">${escapeHtml(a.owner||"(unassigned)")} • ${escapeHtml(a.team||"(unassigned)")} • ${escapeHtml(a.environment||"(unassigned)")} • ${escapeHtml(a.criticality||"(unassigned)")}</div>
+            </div>`;
+          }).join("")}
+        </div>`);
+      }
+
+      document.getElementById("dash_overview").innerHTML = lines.join("");
+      setDashMsg("Overview loaded ✓");
+    }catch(e){
+      setDashMsg(`Overview failed: ${e.message}`);
+      alert(`Dashboard overview error: ${e.message}`);
+    }
+  }
+
+  async function loadDashboardTrend(){
+    try{
+      setDashMsg("Loading trend…");
+      const group_by = document.getElementById("trend_group").value;
+      const metric = document.getElementById("trend_metric").value;
+      const days = parseInt(document.getElementById("trend_days").value || "30", 10);
+      const qs = new URLSearchParams({group_by, metric, days: String(days)});
+      const data = await fetchJson(`/metrics/trends?` + qs.toString());
+      if (data && data.error){
+        setDashMsg(`Trend error: ${data.error}`);
+        alert(`Trend error: ${data.error}`);
+        return;
+      }
+      const pts = data.points || [];
+      const top = data.top_groups || [];
+
+      if (!pts.length){
+        document.getElementById("dash_trend").innerHTML = `<div class="muted">No trend data yet. Run scheduled scans to build history.</div>`;
+        setDashMsg("Trend loaded ✓");
+        return;
+      }
+
+      // render as a compact table: day rows; for each group show value
+      const byDay = {};
+      for (const p of pts){
+        if (!byDay[p.day]) byDay[p.day] = {};
+        byDay[p.day][p.group] = { value: p.value, n: (p.n ?? p.count ?? p.sample_size ?? null) };
+      }
+      const daysSorted = Object.keys(byDay).sort();
+      const header = `<tr><th>day</th>${top.map(g=>`<th>${escapeHtml(g)}</th>`).join("")}</tr>`;
+      const rows = daysSorted.slice(-60).map(d=>{
+        const row = byDay[d] || {};
+        const tds = top.map(g=>{
+          const cell = row[g];
+          if (cell === undefined || cell === null) return `<td></td>`;
+          const v = (typeof cell === "object") ? cell.value : cell;
+          const n = (typeof cell === "object") ? cell.n : null;
+          let s = (typeof v === "number") ? v.toFixed(2) : String(v);
+          if (n !== undefined && n !== null) s += ` (n=${n})`;
+          return `<td>${escapeHtml(s)}</td>`;
+        }).join("");
+        return `<tr><td>${escapeHtml(d)}</td>${tds}</tr>`;
+      }).join("");
+      document.getElementById("dash_trend").innerHTML = `<div style="overflow:auto; border:1px solid rgba(148,163,184,.12); border-radius:12px; padding:10px;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px;">
+          ${header}${rows}
+        </table>
+      </div>`;
+      setDashMsg("Trend loaded ✓");
+    }catch(e){
+      setDashMsg(`Trend failed: ${e.message}`);
+      alert(`Trend error: ${e.message}`);
+    }
+  }
+
+  function _loadDashViewsRaw(){
+    try{
+      const raw = localStorage.getItem(LS_DASH_VIEWS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }catch(_e){ return []; }
+  }
+  function _saveDashViewsRaw(arr){
+    try{ localStorage.setItem(LS_DASH_VIEWS_KEY, JSON.stringify(arr||[])); }catch(_e){}
+  }
+  function refreshDashViews(){
+    const arr = _loadDashViewsRaw();
+    const sel = document.getElementById("dash_views");
+    if (!sel) return;
+    sel.innerHTML = '<option value="">(saved views)</option>' + arr.map((v,i)=>`<option value="${i}">${escapeHtml(v.name)}</option>`).join("");
+  }
+  function saveDashView(){
+    const name = prompt("View name?");
+    if (!name) return;
+    const arr = _loadDashViewsRaw();
+    arr.push({name, filters: dashFilters()});
+    _saveDashViewsRaw(arr);
+    refreshDashViews();
+    setDashMsg("View saved ✓");
+  }
+  function loadDashView(){
+    const sel = document.getElementById("dash_views");
+    if (!sel || !sel.value) return;
+    const i = parseInt(sel.value, 10);
+    const arr = _loadDashViewsRaw();
+    const v = arr[i];
+    if (!v) return;
+    document.getElementById("dash_owner").value = v.filters.owner || "";
+    document.getElementById("dash_team").value = v.filters.team || "";
+    document.getElementById("dash_env").value = v.filters.environment || "";
+    document.getElementById("dash_crit").value = v.filters.criticality || "";
+    setDashMsg("View loaded ✓");
+    loadDashboardOverview();
+  }
+  function deleteDashView(){
+    const sel = document.getElementById("dash_views");
+    if (!sel || !sel.value) return;
+    const i = parseInt(sel.value, 10);
+    const arr = _loadDashViewsRaw();
+    const v = arr[i];
+    if (!v) return;
+    if (!confirm(`Delete view '${v.name}'?`)) return;
+    arr.splice(i,1);
+    _saveDashViewsRaw(arr);
+    refreshDashViews();
+    setDashMsg("View deleted ✓");
+  }
+
+  // expose close fns for safety
+  try{ window.closeCollections = closeCollections; }catch(e){}
+  try{ window.closeSchedules = closeSchedules; }catch(e){}
+  try{ window.closeDashboard = closeDashboard; }catch(e){}
+
+  // expose trend loader for inline onclick
+  try{ window.loadDashboardTrend = loadDashboardTrend; }catch(e){}
+</script>
+
+        <!-- Dashboard Modal -->
+        <div class="modalBackdrop" id="dashBackdrop" onclick="closeDashboard()">
+          <div class="modalBox" onclick="event.stopPropagation()">
+            <div class="modalHeader">
+              <div class="modalTitle">Dashboard</div>
+              <button class="btn ghost" id="dashCloseBtn" type="button" onclick="closeDashboard()">Close</button>
+            </div>
+
+            <div class="modalGrid">
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Owner</div>
+                <input id="dash_owner" placeholder="(optional)" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Team</div>
+                <input id="dash_team" placeholder="(optional)" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Environment</div>
+                <input id="dash_env" placeholder="(optional)" />
+              </div>
+              <div>
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Criticality</div>
+                <select id="dash_crit" style="width:100%">
+                  <option value="">(any)</option>
+                  <option value="tier-0">tier-0</option>
+                  <option value="tier-1">tier-1</option>
+                  <option value="tier-2">tier-2</option>
+                  <option value="tier-3">tier-3</option>
+                </select>
+              </div>
+
+              <div class="row full" style="justify-content:flex-start; gap:10px;">
+                <div class="tight"><button class="btn" id="dash_refresh">Refresh</button></div>
+                <div class="tight"><button class="btn ghost" id="dash_save_view">Save view</button></div>
+                <div class="tight"><select id="dash_views" style="width:220px"><option value="">(saved views)</option></select></div>
+                <div class="tight"><button class="btn ghost" id="dash_load_view">Load</button></div>
+                <div class="tight"><button class="btn ghost" id="dash_delete_view">Delete</button></div>
+                <div class="tight"><span class="muted mono" id="dash_msg"></span></div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Overview (current scan)</div>
+                <div id="dash_overview" class="mono" style="font-size:12px;"></div>
+              </div>
+
+              <div class="full">
+                <div class="muted" style="font-size:11px; margin-bottom:6px;">Trends (last 30 days)</div>
+                <div class="row" style="gap:10px; margin-bottom:8px;">
+                  <div class="tight">
+                    <select id="trend_group" style="width:220px">
+                      <option value="team">group by team</option>
+                      <option value="environment">group by environment</option>
+                      <option value="owner">group by owner</option>
+                      <option value="criticality">group by criticality</option>
+                    </select>
+                  </div>
+                  <div class="tight">
+                    <select id="trend_metric" style="width:220px">
+                      <option value="avg_score">avg quantum score</option>
+                      <option value="avg_findings">avg findings count</option>
+                      <option value="assets_with_findings">assets with findings</option>
+                    </select>
+                  </div>
+                  <div class="tight">
+                    <input id="trend_days" type="number" min="1" max="3650" value="30" style="width:120px" />
+                  </div>
+                  <div class="tight"><button class="btn ghost" id="trend_refresh" onclick="loadDashboardTrend()">Load trend</button></div>
+                </div>
+                <div id="dash_trend" class="mono" style="font-size:12px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+</body>
+</html>

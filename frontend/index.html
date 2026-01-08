@@ -525,6 +525,91 @@ incomplete-chain.badssl.com</textarea>
   </div>
 
 <script>
+  // ---- Sprint 7: Job polling (Celery) ----
+  let currentJobId = "";
+  let jobPollTimer = null;
+
+  function setJobBoxVisible(v){
+    const box = document.getElementById("jobBox");
+    if (!box) return;
+    box.style.display = v ? "block" : "none";
+  }
+
+  function setJobUI(state, meta){
+    const st = document.getElementById("jobState");
+    const mt = document.getElementById("jobMeta");
+    const bar = document.getElementById("jobBar");
+    if (st) st.textContent = state || "—";
+    const done = (meta && (meta.done ?? meta.current)) ?? 0;
+    const total = (meta && (meta.total ?? meta.max)) ?? 0;
+    let pct = meta ? meta.percent : null;
+    if (pct == null && total) pct = Math.round((done/total)*100);
+    if (pct == null) pct = (state === "SUCCESS") ? 100 : 0;
+    if (bar) bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    if (mt){
+      if (total){
+        mt.textContent = `${done}/${total} (${pct}%)`;
+      } else if (pct){
+        mt.textContent = `${pct}%`;
+      } else {
+        mt.textContent = "";
+      }
+    }
+  }
+
+  async function fetchJob(jobId){
+    return await fetchJson(`/jobs/${encodeURIComponent(jobId)}`);
+  }
+
+  async function tickJob(jobId){
+    const j = await fetchJob(jobId);
+    const state = j && j.state ? j.state : "PENDING";
+    const meta = j && j.meta ? j.meta : {};
+    setJobUI(state, meta);
+
+    if (state === "PROGRESS" || state === "STARTED" || state === "PENDING"){
+      if (currentScanId){
+        await loadResults(true);
+      }
+      return;
+    }
+
+    if (state === "SUCCESS"){
+      if (currentScanId){
+        await loadResults(true);
+      }
+      stopJobPoll();
+      return;
+    }
+
+    if (state === "FAILURE"){
+      stopJobPoll();
+      alert("Job failed. Check API logs for details.");
+      return;
+    }
+  }
+
+  function stopJobPoll(){
+    if (jobPollTimer) clearInterval(jobPollTimer);
+    jobPollTimer = null;
+    currentJobId = "";
+  }
+
+  function startJobPoll(jobId){
+    if (!jobId) return;
+    currentJobId = jobId;
+    setJobBoxVisible(true);
+    setJobUI("PENDING", {});
+    if (jobPollTimer) clearInterval(jobPollTimer);
+    tickJob(jobId).catch(e => alert(`Job poll error: ${e.message}`));
+    jobPollTimer = setInterval(() => {
+      tickJob(jobId).catch(e => {
+        stopJobPoll();
+        alert(`Job poll error: ${e.message}`);
+      });
+    }, 1500);
+  }
+
   
   // Safe DOM helpers (avoid crashes if optional elements are missing)
   function $(id){ return document.getElementById(id); }
