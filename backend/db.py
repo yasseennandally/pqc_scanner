@@ -4,29 +4,51 @@ import os
 import sqlite3
 import json
 from contextlib import closing
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-DB_PATH = os.environ.get("PQC_SCANNER_DB", "pqc_scanner.db")
+DB_PATH = os.environ.get("PQC_SCANNER_DB", "/data/pqc_scanner.db")
 
 
 def get_connection():
-    # check_same_thread=False allows background scan threads to write progress
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    # check_same_thread=False allows background scan threads / workers to write progress
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # Always ensure schema exists (API/worker/beat all share the same SQLite file)
+    _ensure_columns(conn)
+    _ensure_sprint5_tables(conn)
+    return conn
+
 
 
 def _parse_iso_datetime(dt_str: str) -> datetime:
+    """Parse an ISO datetime string into a naive UTC datetime.
+
+    Accepts:
+      - naive ISO strings (e.g. 2026-01-06T12:34:56.123456)
+      - 'Z' suffix (UTC)
+      - timezone offsets (e.g. +00:00)
+    """
     if not dt_str:
         return datetime.utcfromtimestamp(0)
+
+    s = str(dt_str).strip()
     try:
-        # Python 3.11+ supports fromisoformat with timezone, but we store naive utc
-        return datetime.fromisoformat(dt_str)
+        # Support 'Z' (UTC) and offset-aware timestamps.
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
     except Exception:
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        # Fallback for a few common formats
+        s2 = s[:-1] if s.endswith("Z") else s
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
             try:
-                return datetime.strptime(dt_str, fmt)
+                return datetime.strptime(s2, fmt)
             except Exception:
                 pass
+
     return datetime.utcfromtimestamp(0)
 
 
@@ -101,6 +123,12 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
 
     add("progress_json", "ALTER TABLE scans ADD COLUMN progress_json TEXT NOT NULL DEFAULT '{}'")
     add("error_text", "ALTER TABLE scans ADD COLUMN error_text TEXT NOT NULL DEFAULT ''")
+
+    add("job_id", "ALTER TABLE scans ADD COLUMN job_id TEXT NOT NULL DEFAULT ''")
+    add("job_state", "ALTER TABLE scans ADD COLUMN job_state TEXT NOT NULL DEFAULT ''")
+    add("job_started_at", "ALTER TABLE scans ADD COLUMN job_started_at TEXT NOT NULL DEFAULT ''")
+    add("job_finished_at", "ALTER TABLE scans ADD COLUMN job_finished_at TEXT NOT NULL DEFAULT ''")
+
     add("results_json", "ALTER TABLE scans ADD COLUMN results_json TEXT NOT NULL DEFAULT '[]'")
     add("summary_json", "ALTER TABLE scans ADD COLUMN summary_json TEXT NOT NULL DEFAULT '{}'")
 
@@ -833,3 +861,34 @@ def list_scan_results_since(since_iso: str, limit: int = 200000) -> list[dict]:
                 return []
             raise
         return [dict(r) for r in rows]
+
+
+def update_scan_job(
+    scan_id: str,
+    job_id: str = "",
+    job_state: str = "",
+    started_at_iso: str = "",
+    finished_at_iso: str = "",
+) -> None:
+    """Persist Celery job metadata for a scan."""
+    with closing(get_connection()) as conn:
+        _ensure_columns(conn)
+        sets = []
+        vals: list[Any] = []
+        if job_id != "":
+            sets.append("job_id = ?")
+            vals.append(job_id)
+        if job_state != "":
+            sets.append("job_state = ?")
+            vals.append(job_state)
+        if started_at_iso != "":
+            sets.append("job_started_at = ?")
+            vals.append(started_at_iso)
+        if finished_at_iso != "":
+            sets.append("job_finished_at = ?")
+            vals.append(finished_at_iso)
+        if not sets:
+            return
+        vals.append(scan_id)
+        conn.execute(f"UPDATE scans SET {', '.join(sets)} WHERE id = ?", vals)
+        conn.commit()
