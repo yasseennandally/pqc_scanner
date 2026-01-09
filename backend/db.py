@@ -192,13 +192,56 @@ def _ensure_sprint5_tables(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_results_asset ON scan_results(asset_key, scanned_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id)")
 
+
+def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
+    """Sprint 8: webhook integrations tables."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS webhooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            url TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            events_json TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            webhook_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            scan_id TEXT NOT NULL,
+            asset_key TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            delivered_at TEXT NOT NULL DEFAULT '',
+            ok INTEGER NOT NULL DEFAULT 0,
+            status_code INTEGER,
+            error_text TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY(webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE,
+            UNIQUE(webhook_id, dedupe_key)
+        )
+        """
+    )
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhooks_enabled ON webhooks(enabled)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_type ON webhook_events(event_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_scan ON webhook_events(scan_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_asset ON webhook_events(asset_key)")
+
 def init_db():
     with closing(get_connection()) as conn:
         _ensure_columns(conn)
         _ensure_sprint5_tables(conn)
+        _ensure_integrations_tables(conn)
         conn.commit()
-
-
 
 def save_scan_row(
     scan_id: str,
@@ -892,3 +935,180 @@ def update_scan_job(
         vals.append(scan_id)
         conn.execute(f"UPDATE scans SET {', '.join(sets)} WHERE id = ?", vals)
         conn.commit()
+
+# -----------------------------
+# Sprint 8: Integrations (webhooks)
+# -----------------------------
+
+def upsert_webhook(name: str, url: str, secret: str, events: List[str], enabled: bool = True) -> Dict[str, Any]:
+    name = (name or "").strip()
+    url = (url or "").strip()
+    secret = (secret or "").strip()
+    events = [str(e).strip() for e in (events or []) if str(e).strip()]
+    if not name:
+        raise ValueError("name required")
+    if not url:
+        raise ValueError("url required")
+    if not secret:
+        raise ValueError("secret required")
+    now = _utc_now_iso()
+    with get_connection() as conn:
+        _ensure_columns(conn)
+        _ensure_sprint5_tables(conn)
+        _ensure_integrations_tables(conn)
+        conn.execute(
+            """
+            INSERT INTO webhooks (name, url, secret, events_json, enabled, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(name) DO UPDATE SET
+                url=excluded.url,
+                secret=excluded.secret,
+                events_json=excluded.events_json,
+                enabled=excluded.enabled,
+                updated_at=excluded.updated_at
+            """,
+            (name, url, secret, json.dumps(events), 1 if enabled else 0, now, now),
+        )
+        row = conn.execute(
+            "SELECT id, name, url, secret, events_json, enabled, created_at, updated_at FROM webhooks WHERE name=?",
+            (name,),
+        ).fetchone()
+        conn.commit()
+        return {
+            "id": row[0],
+            "name": row[1],
+            "url": row[2],
+            "secret": row[3],
+            "events": json.loads(row[4] or "[]"),
+            "enabled": bool(row[5]),
+            "created_at": row[6],
+            "updated_at": row[7],
+        }
+
+
+def list_webhooks() -> List[Dict[str, Any]]:
+    with get_connection() as conn:
+        _ensure_columns(conn)
+        _ensure_sprint5_tables(conn)
+        _ensure_integrations_tables(conn)
+        rows = conn.execute(
+            "SELECT id, name, url, secret, events_json, enabled, created_at, updated_at FROM webhooks ORDER BY name ASC"
+        ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            out.append(
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "url": r[2],
+                    "secret": r[3],
+                    "events": json.loads(r[4] or "[]"),
+                    "enabled": bool(r[5]),
+                    "created_at": r[6],
+                    "updated_at": r[7],
+                }
+            )
+        return out
+
+
+def delete_webhook(webhook_id: int) -> None:
+    with get_connection() as conn:
+        _ensure_columns(conn)
+        _ensure_sprint5_tables(conn)
+        _ensure_integrations_tables(conn)
+        conn.execute("DELETE FROM webhooks WHERE id = ?", (int(webhook_id),))
+        conn.commit()
+
+
+def get_enabled_webhooks_for_event(event_type: str) -> List[Dict[str, Any]]:
+    et = (event_type or "").strip()
+    if not et:
+        return []
+    with get_connection() as conn:
+        _ensure_columns(conn)
+        _ensure_sprint5_tables(conn)
+        _ensure_integrations_tables(conn)
+        rows = conn.execute(
+            "SELECT id, name, url, secret, events_json FROM webhooks WHERE enabled=1"
+        ).fetchall()
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            events = json.loads(r[4] or "[]")
+            if "*" in events or et in events:
+                out.append({"id": r[0], "name": r[1], "url": r[2], "secret": r[3], "events": events})
+        return out
+
+
+def reserve_webhook_event(
+    webhook_id: int,
+    event_type: str,
+    scan_id: str,
+    asset_key: str,
+    dedupe_key: str,
+    payload_sha256: str,
+) -> Optional[int]:
+    """Insert a webhook event row if not already seen for this webhook+dedupe_key.
+    Returns event row id if reserved, else None.
+    """
+    now = _utc_now_iso()
+    with get_connection() as conn:
+        _ensure_columns(conn)
+        _ensure_sprint5_tables(conn)
+        _ensure_integrations_tables(conn)
+        cur = conn.execute(
+            """
+            INSERT OR IGNORE INTO webhook_events
+                (webhook_id, event_type, scan_id, asset_key, dedupe_key, payload_sha256, created_at)
+            VALUES (?,?,?,?,?,?,?)
+            """,
+            (int(webhook_id), str(event_type or ""), str(scan_id or ""), str(asset_key or ""), str(dedupe_key or ""), str(payload_sha256 or ""), now),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT id FROM webhook_events WHERE webhook_id=? AND dedupe_key=?",
+            (int(webhook_id), str(dedupe_key or "")),
+        ).fetchone()
+        return int(row[0]) if row else None
+
+
+def mark_webhook_event_delivered(event_id: int, ok: bool, status_code: Optional[int], error_text: str) -> None:
+    now = _utc_now_iso()
+    with get_connection() as conn:
+        _ensure_columns(conn)
+        _ensure_sprint5_tables(conn)
+        _ensure_integrations_tables(conn)
+        conn.execute(
+            """
+            UPDATE webhook_events
+            SET delivered_at=?, ok=?, status_code=?, error_text=?
+            WHERE id=?
+            """,
+            (now, 1 if ok else 0, int(status_code) if status_code is not None else None, (error_text or ""), int(event_id)),
+        )
+        conn.commit()
+
+
+def get_scan_result_for_asset(scan_id: str, asset_key_str: str) -> Optional[Dict[str, Any]]:
+    scan_id = (scan_id or "").strip()
+    ak = (asset_key_str or "").strip()
+    if not scan_id or not ak:
+        return None
+    with get_connection() as conn:
+        _ensure_columns(conn)
+        _ensure_sprint5_tables(conn)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT asset_key, scan_id, scanned_at, risk_level, quantum_score, findings_count,
+                   pqc_relevance, tls_version, key_type, sig_algorithm,
+                   owner, team, environment, criticality
+            FROM scan_results
+            WHERE scan_id = ? AND asset_key = ?
+            ORDER BY scanned_at DESC
+            LIMIT 1
+            """,
+            (scan_id, ak),
+        ).fetchone()
+        return dict(row) if row else None
