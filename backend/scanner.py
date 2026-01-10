@@ -495,8 +495,9 @@ def _parse_stapled_ocsp(der_bytes: bytes) -> Dict[str, Any]:
 
 def _try_get_ocsp_staple(ssock: ssl.SSLSocket) -> Dict[str, Any]:
     """
-    Best-effort OCSP stapling detection.
-    Some Python/OpenSSL builds expose an ocsp response accessor; others do not.
+    Best-effort OCSP stapling detection + parsing.
+
+    NOTE: Python/OpenSSL exposure varies by platform/build. This function must never raise.
     """
     out = {
         "ocsp_stapling_supported": False,
@@ -504,12 +505,12 @@ def _try_get_ocsp_staple(ssock: ssl.SSLSocket) -> Dict[str, Any]:
         "ocsp_stapled_len": 0,
         "ocsp_stapled_sha256": "",
 
+        # parsed fields (may remain empty)
+        "ocsp_response_status": "",
         "ocsp_stapled_status": "",
         "ocsp_stapled_this_update": "",
         "ocsp_stapled_next_update": "",
         "ocsp_stapled_produced_at": "",
-
-        "ocsp_response_status": "",
         "ocsp_stapled_is_stale": False,
         "ocsp_stapled_stale_by_days": None,
 
@@ -517,14 +518,11 @@ def _try_get_ocsp_staple(ssock: ssl.SSLSocket) -> Dict[str, Any]:
         "crl_reachability": [],
     }
 
-    # A few possible attribute names depending on Python/OpenSSL build.
-    candidates = [
-        "ocsp_response",         # property or method on some builds
-        "get_ocsp_response",     # some wrappers
-    ]
-
     try:
         resp = None
+
+        # Different Python/OpenSSL builds expose this differently.
+        candidates = ["ocsp_response", "get_ocsp_response", "_ocsp_response"]
         for name in candidates:
             if hasattr(ssock, name):
                 attr = getattr(ssock, name)
@@ -533,22 +531,20 @@ def _try_get_ocsp_staple(ssock: ssl.SSLSocket) -> Dict[str, Any]:
                 break
 
         if isinstance(resp, (bytes, bytearray)) and len(resp) > 0:
+            resp_b = bytes(resp)
             out["ocsp_stapled"] = True
-            out["ocsp_stapled_len"] = len(resp)
-            out["ocsp_stapled_sha256"] = hashlib.sha256(bytes(resp)).hexdigest()
+            out["ocsp_stapled_len"] = len(resp_b)
+            out["ocsp_stapled_sha256"] = hashlib.sha256(resp_b).hexdigest()
 
-            # Parse stapled OCSP response (best-effort)
+            # Parse response into status/timestamps where possible
             try:
-                parsed = _parse_stapled_ocsp(bytes(resp))
-                if isinstance(parsed, dict):
-                    out.update(parsed)
+                out.update(_parse_stapled_ocsp(resp_b))
             except Exception:
                 pass
     except Exception:
         pass
 
     return out
-
 
 
 def _get_cert_chain_der_with_source(ssock: ssl.SSLSocket) -> Tuple[List[bytes], str, str, str]:
@@ -795,7 +791,7 @@ def scan_host(host: str, port: int = 443) -> Dict[str, Any]:
                         facts["not_before"] = _utc_iso(cert.not_valid_before)
                         facts["not_after"] = _utc_iso(cert.not_valid_after)
                         facts["days_until_expiry"] = _days_until(cert.not_valid_after)
-                        kt, kd = _extract_key_info(cert)
+                        kt, kd = _pk_info(cert)
                         facts["key_type"] = kt
                         facts["key_detail"] = kd
                         facts.update(_extract_leaf_extensions(cert))

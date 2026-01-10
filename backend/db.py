@@ -16,6 +16,7 @@ def get_connection():
     # Always ensure schema exists (API/worker/beat all share the same SQLite file)
     _ensure_columns(conn)
     _ensure_sprint5_tables(conn)
+    _ensure_integrations_tables(conn)
     return conn
 
 
@@ -192,11 +193,10 @@ def _ensure_sprint5_tables(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_results_asset ON scan_results(asset_key, scanned_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id)")
 
-
 def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
-    """Sprint 8: webhook integrations tables."""
+    """Ensure Sprint 8 integrations tables exist (webhooks + delivery log)."""
     conn.execute(
-        """
+        '''
         CREATE TABLE IF NOT EXISTS webhooks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
@@ -207,34 +207,93 @@ def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
-        """
+        '''
     )
-
     conn.execute(
-        """
+        '''
         CREATE TABLE IF NOT EXISTS webhook_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             webhook_id INTEGER NOT NULL,
-            event_type TEXT NOT NULL,
-            scan_id TEXT NOT NULL,
-            asset_key TEXT NOT NULL,
-            dedupe_key TEXT NOT NULL,
-            payload_sha256 TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            delivered_at TEXT NOT NULL DEFAULT '',
-            ok INTEGER NOT NULL DEFAULT 0,
-            status_code INTEGER,
-            error_text TEXT NOT NULL DEFAULT '',
+            event_type TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            http_status INTEGER NOT NULL,
+            error_text TEXT NOT NULL,
             FOREIGN KEY(webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE,
             UNIQUE(webhook_id, dedupe_key)
         )
-        """
+        '''
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_webhook ON webhook_events(webhook_id)")
+
+def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
+    """Ensure Sprint 8 integrations tables exist (webhooks + delivery log)."""
+    conn.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS webhooks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            url TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            events_json TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        '''
     )
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhooks_enabled ON webhooks(enabled)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_type ON webhook_events(event_type)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_scan ON webhook_events(scan_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_asset ON webhook_events(asset_key)")
+    conn.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            webhook_id INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            http_status INTEGER NOT NULL,
+            error_text TEXT NOT NULL,
+            FOREIGN KEY(webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE,
+            UNIQUE(webhook_id, dedupe_key)
+        )
+        '''
+    )
+
+    # Backward-compatible migrations if table already existed with fewer columns
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(webhooks)").fetchall()}
+        if "events_json" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN events_json TEXT NOT NULL DEFAULT '[]'")
+        if "enabled" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+        if "created_at" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass
+
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(webhook_events)").fetchall()}
+        if "status" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN status TEXT NOT NULL DEFAULT 'queued'")
+        if "http_status" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN http_status INTEGER NOT NULL DEFAULT 0")
+        if "error_text" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN error_text TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_webhook ON webhook_events(webhook_id)")
+
+
+
 
 def init_db():
     with closing(get_connection()) as conn:
@@ -242,6 +301,8 @@ def init_db():
         _ensure_sprint5_tables(conn)
         _ensure_integrations_tables(conn)
         conn.commit()
+
+
 
 def save_scan_row(
     scan_id: str,
@@ -906,6 +967,183 @@ def list_scan_results_since(since_iso: str, limit: int = 200000) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+# -----------------------------
+# Sprint 8 Integrations: Webhooks + Delivery Log
+# -----------------------------
+
+def list_webhooks(limit: int = 200) -> list[dict]:
+    limit = max(1, min(int(limit), 500))
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, name, url, secret, events_json, enabled, created_at, updated_at FROM webhooks ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                ev = json.loads(r["events_json"] or "[]")
+            except Exception:
+                ev = []
+            out.append(
+                {
+                    "id": r["id"],
+                    "name": r["name"],
+                    "url": r["url"],
+                    "secret": r["secret"],
+                    "events": ev,
+                    "enabled": bool(r["enabled"]),
+                    "created_at": r["created_at"],
+                    "updated_at": r["updated_at"],
+                }
+            )
+        return out
+
+
+def upsert_webhook(
+    name: str,
+    url: str,
+    secret: str = "",
+    events: Optional[List[str]] = None,
+    enabled: bool = True,
+    webhook_id: Optional[int] = None,
+) -> dict:
+    name = (name or "").strip()
+    url = (url or "").strip()
+    secret = secret or ""
+    events = events or ["*"]
+    if not name:
+        raise ValueError("name is required")
+    if not url:
+        raise ValueError("url is required")
+
+    now = _utc_now_iso()
+    ev_json = json.dumps(events)
+
+    with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+        if webhook_id:
+            conn.execute(
+                "UPDATE webhooks SET name=?, url=?, secret=?, events_json=?, enabled=?, updated_at=? WHERE id=?",
+                (name, url, secret, ev_json, 1 if enabled else 0, now, int(webhook_id)),
+            )
+        else:
+            # Insert or update by name
+            conn.execute(
+                "INSERT INTO webhooks(name,url,secret,events_json,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(name) DO UPDATE SET url=excluded.url, secret=excluded.secret, events_json=excluded.events_json, enabled=excluded.enabled, updated_at=excluded.updated_at",
+                (name, url, secret, ev_json, 1 if enabled else 0, now, now),
+            )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT id, name, url, secret, events_json, enabled, created_at, updated_at FROM webhooks WHERE name=?",
+            (name,),
+        ).fetchone()
+        if not row:
+            raise RuntimeError("failed to upsert webhook")
+
+        try:
+            ev = json.loads(row["events_json"] or "[]")
+        except Exception:
+            ev = []
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "url": row["url"],
+            "secret": row["secret"],
+            "events": ev,
+            "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+
+def delete_webhook(webhook_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM webhooks WHERE id = ?", (int(webhook_id),))
+        conn.commit()
+
+
+def record_webhook_event(
+    webhook_id: int,
+    event_type: str,
+    dedupe_key: str,
+    payload: dict,
+    status: str = "queued",
+    http_status: int = 0,
+    error_text: str = "",
+) -> Optional[int]:
+    """Insert an outgoing event attempt. Returns event row id, or None if deduped (already exists)."""
+    now = _utc_now_iso()
+    payload_json = json.dumps(payload or {})
+    with get_connection() as conn:
+        try:
+            cur = conn.execute(
+                "INSERT INTO webhook_events(webhook_id,created_at,event_type,dedupe_key,payload_json,status,http_status,error_text) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (int(webhook_id), now, str(event_type), str(dedupe_key), payload_json, str(status), int(http_status), str(error_text or "")),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            # deduped by UNIQUE(webhook_id, dedupe_key)
+            return None
+
+
+def update_webhook_event(event_row_id: int, status: str, http_status: int = 0, error_text: str = "") -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE webhook_events SET status=?, http_status=?, error_text=? WHERE id=?",
+            (str(status), int(http_status), str(error_text or ""), int(event_row_id)),
+        )
+        conn.commit()
+
+
+def list_webhook_events(limit: int = 50):
+    import json as _json
+
+    try:
+        limit = int(limit or 50)
+    except Exception:
+        limit = 50
+
+    if limit < 1:
+        limit = 1
+    if limit > 500:
+        limit = 500
+
+    with closing(get_connection()) as conn:
+        _ensure_integrations_tables(conn)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, webhook_id, created_at, event_type, dedupe_key,
+                   status, http_status, error_text, payload_json
+            FROM webhook_events
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+
+    out = []
+    for r in rows:
+        d = dict(r)  # IMPORTANT: json-serializable
+        pj = d.get("payload_json") or "{}"
+        try:
+            d["payload"] = _json.loads(pj)
+        except Exception:
+            d["payload"] = pj
+        d.pop("payload_json", None)
+        out.append(d)
+
+    return out
+
+
+
 def update_scan_job(
     scan_id: str,
     job_id: str = "",
@@ -935,180 +1173,3 @@ def update_scan_job(
         vals.append(scan_id)
         conn.execute(f"UPDATE scans SET {', '.join(sets)} WHERE id = ?", vals)
         conn.commit()
-
-# -----------------------------
-# Sprint 8: Integrations (webhooks)
-# -----------------------------
-
-def upsert_webhook(name: str, url: str, secret: str, events: List[str], enabled: bool = True) -> Dict[str, Any]:
-    name = (name or "").strip()
-    url = (url or "").strip()
-    secret = (secret or "").strip()
-    events = [str(e).strip() for e in (events or []) if str(e).strip()]
-    if not name:
-        raise ValueError("name required")
-    if not url:
-        raise ValueError("url required")
-    if not secret:
-        raise ValueError("secret required")
-    now = _utc_now_iso()
-    with get_connection() as conn:
-        _ensure_columns(conn)
-        _ensure_sprint5_tables(conn)
-        _ensure_integrations_tables(conn)
-        conn.execute(
-            """
-            INSERT INTO webhooks (name, url, secret, events_json, enabled, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(name) DO UPDATE SET
-                url=excluded.url,
-                secret=excluded.secret,
-                events_json=excluded.events_json,
-                enabled=excluded.enabled,
-                updated_at=excluded.updated_at
-            """,
-            (name, url, secret, json.dumps(events), 1 if enabled else 0, now, now),
-        )
-        row = conn.execute(
-            "SELECT id, name, url, secret, events_json, enabled, created_at, updated_at FROM webhooks WHERE name=?",
-            (name,),
-        ).fetchone()
-        conn.commit()
-        return {
-            "id": row[0],
-            "name": row[1],
-            "url": row[2],
-            "secret": row[3],
-            "events": json.loads(row[4] or "[]"),
-            "enabled": bool(row[5]),
-            "created_at": row[6],
-            "updated_at": row[7],
-        }
-
-
-def list_webhooks() -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        _ensure_columns(conn)
-        _ensure_sprint5_tables(conn)
-        _ensure_integrations_tables(conn)
-        rows = conn.execute(
-            "SELECT id, name, url, secret, events_json, enabled, created_at, updated_at FROM webhooks ORDER BY name ASC"
-        ).fetchall()
-        out: List[Dict[str, Any]] = []
-        for r in rows:
-            out.append(
-                {
-                    "id": r[0],
-                    "name": r[1],
-                    "url": r[2],
-                    "secret": r[3],
-                    "events": json.loads(r[4] or "[]"),
-                    "enabled": bool(r[5]),
-                    "created_at": r[6],
-                    "updated_at": r[7],
-                }
-            )
-        return out
-
-
-def delete_webhook(webhook_id: int) -> None:
-    with get_connection() as conn:
-        _ensure_columns(conn)
-        _ensure_sprint5_tables(conn)
-        _ensure_integrations_tables(conn)
-        conn.execute("DELETE FROM webhooks WHERE id = ?", (int(webhook_id),))
-        conn.commit()
-
-
-def get_enabled_webhooks_for_event(event_type: str) -> List[Dict[str, Any]]:
-    et = (event_type or "").strip()
-    if not et:
-        return []
-    with get_connection() as conn:
-        _ensure_columns(conn)
-        _ensure_sprint5_tables(conn)
-        _ensure_integrations_tables(conn)
-        rows = conn.execute(
-            "SELECT id, name, url, secret, events_json FROM webhooks WHERE enabled=1"
-        ).fetchall()
-        out: List[Dict[str, Any]] = []
-        for r in rows:
-            events = json.loads(r[4] or "[]")
-            if "*" in events or et in events:
-                out.append({"id": r[0], "name": r[1], "url": r[2], "secret": r[3], "events": events})
-        return out
-
-
-def reserve_webhook_event(
-    webhook_id: int,
-    event_type: str,
-    scan_id: str,
-    asset_key: str,
-    dedupe_key: str,
-    payload_sha256: str,
-) -> Optional[int]:
-    """Insert a webhook event row if not already seen for this webhook+dedupe_key.
-    Returns event row id if reserved, else None.
-    """
-    now = _utc_now_iso()
-    with get_connection() as conn:
-        _ensure_columns(conn)
-        _ensure_sprint5_tables(conn)
-        _ensure_integrations_tables(conn)
-        cur = conn.execute(
-            """
-            INSERT OR IGNORE INTO webhook_events
-                (webhook_id, event_type, scan_id, asset_key, dedupe_key, payload_sha256, created_at)
-            VALUES (?,?,?,?,?,?,?)
-            """,
-            (int(webhook_id), str(event_type or ""), str(scan_id or ""), str(asset_key or ""), str(dedupe_key or ""), str(payload_sha256 or ""), now),
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return None
-        row = conn.execute(
-            "SELECT id FROM webhook_events WHERE webhook_id=? AND dedupe_key=?",
-            (int(webhook_id), str(dedupe_key or "")),
-        ).fetchone()
-        return int(row[0]) if row else None
-
-
-def mark_webhook_event_delivered(event_id: int, ok: bool, status_code: Optional[int], error_text: str) -> None:
-    now = _utc_now_iso()
-    with get_connection() as conn:
-        _ensure_columns(conn)
-        _ensure_sprint5_tables(conn)
-        _ensure_integrations_tables(conn)
-        conn.execute(
-            """
-            UPDATE webhook_events
-            SET delivered_at=?, ok=?, status_code=?, error_text=?
-            WHERE id=?
-            """,
-            (now, 1 if ok else 0, int(status_code) if status_code is not None else None, (error_text or ""), int(event_id)),
-        )
-        conn.commit()
-
-
-def get_scan_result_for_asset(scan_id: str, asset_key_str: str) -> Optional[Dict[str, Any]]:
-    scan_id = (scan_id or "").strip()
-    ak = (asset_key_str or "").strip()
-    if not scan_id or not ak:
-        return None
-    with get_connection() as conn:
-        _ensure_columns(conn)
-        _ensure_sprint5_tables(conn)
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """
-            SELECT asset_key, scan_id, scanned_at, risk_level, quantum_score, findings_count,
-                   pqc_relevance, tls_version, key_type, sig_algorithm,
-                   owner, team, environment, criticality
-            FROM scan_results
-            WHERE scan_id = ? AND asset_key = ?
-            ORDER BY scanned_at DESC
-            LIMIT 1
-            """,
-            (scan_id, ak),
-        ).fetchone()
-        return dict(row) if row else None

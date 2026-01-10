@@ -44,6 +44,13 @@ def _get_list(v: Any) -> List[Any]:
     return [v]
 
 
+def _get_str(v: Any) -> str:
+    if v is None:
+        return ""
+    return str(v)
+
+
+
 def _san_dns(f: Dict[str, Any]) -> List[str]:
     return [str(x).lower() for x in _get_list(f.get("san_dns")) if str(x).strip()]
 
