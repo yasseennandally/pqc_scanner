@@ -7,7 +7,6 @@ import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from collections import defaultdict, deque
-
 from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -51,6 +50,11 @@ from db import (
     list_scan_results,
     list_scan_results_since,
     get_asset_history,
+    # Sprint 8 integrations
+    list_webhooks,
+    upsert_webhook,
+    delete_webhook,
+    list_webhook_events,
 )
 
 
@@ -283,20 +287,19 @@ def _create_scan_and_start(targets: List[str], source: str = "manual", collectio
 
     scan = {
         "id": scan_id,
-        "status": "queued",
+        "status": "running",
         "created_at": created_at,
         "progress": prog,
         "error": "",
         "results": [],
         "summary": {},
-        "job_id": "",
         "meta": {"source": source, "collection_id": collection_id},
     }
     _cache_put(scan)
 
     save_scan_row(
         scan_id=scan_id,
-        status="queued",
+        status="running",
         created_at=created_at,
         progress=prog,
         error_text="",
@@ -304,14 +307,11 @@ def _create_scan_and_start(targets: List[str], source: str = "manual", collectio
         summary={},
     )
 
-    # Enqueue Celery job (single execution model)
-    res = run_scan_task.delay(scan_id, targets)
-    update_scan_job(scan_id, job_id=res.id, job_state="PENDING")
+    t = threading.Thread(target=_scan_worker, args=(scan_id, targets), daemon=True)
+    t.start()
 
-    scan["job_id"] = res.id
-    _cache_put(scan)
+    return {"id": scan_id, "status": "running", "created_at": created_at.isoformat() + "Z"}
 
-    return {"id": scan_id, "status": "queued", "created_at": created_at.isoformat() + "Z", "job_id": res.id}
 
 def _scheduler_loop():
     # Runs forever, triggers collection scans when due.
@@ -335,10 +335,6 @@ def _scheduler_loop():
 @app.on_event("startup")
 def _start_scheduler():
     global _SCHED_THREAD
-    enabled = os.getenv("ENABLE_INPROCESS_SCHEDULER", "0").strip().lower() in ("1", "true", "yes")
-    if not enabled:
-        # In Docker/production we prefer Celery Beat (see tasks.enqueue_due_schedules).
-        return
     try:
         if _SCHED_THREAD and _SCHED_THREAD.is_alive():
             return
@@ -1268,4 +1264,58 @@ def get_job(job_id: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# -----------------------------
+# Sprint 8: Integrations (Webhooks)
+# -----------------------------
+
+class WebhookIn(BaseModel):
+    id: Optional[int] = None
+    name: str = Field(..., min_length=1)
+    url: str = Field(..., min_length=1)
+    secret: str = ""
+    events: List[str] = Field(default_factory=lambda: ["*"])
+    enabled: bool = True
+
+
+@app.get("/integrations/webhook-events")
+def api_list_webhook_events(limit: int = 50):
+    try:
+        return list_webhook_events(limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"webhook-events failed: {e}")
+
+
+
+@app.post("/integrations/webhooks")
+def api_upsert_webhook(body: WebhookIn):
+    try:
+        w = upsert_webhook(
+            name=body.name,
+            url=body.url,
+            secret=body.secret,
+            events=body.events,
+            enabled=body.enabled,
+            webhook_id=body.id,
+        )
+        return {"ok": True, "webhook": w}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/integrations/webhooks/{webhook_id}")
+def api_delete_webhook(webhook_id: int):
+    delete_webhook(webhook_id)
+    return {"ok": True}
+
+
+@app.get("/integrations/webhook-events")
+def api_list_webhook_events(limit: int = 50):
+    return {"items": list_webhook_events(limit=limit)}
+
+@app.get("/integrations/webhooks")
+def api_list_webhooks():
+    return list_webhooks()
+
+
 

@@ -2,21 +2,15 @@ from __future__ import annotations
 
 import os
 import uuid
-import json
-import time
-import hmac
-import hashlib
 from datetime import datetime
 from typing import Any, Dict, List
-
-from urllib import request as _urlrequest
-from urllib.error import URLError, HTTPError
 
 import concurrent.futures
 from celery import Celery
 
 from scanner import scan_host, parse_target
 from policy import summarize_results
+from events import deliver_events_for_scan
 from db import (
     save_scan_row,
     update_scan_progress,
@@ -26,14 +20,7 @@ from db import (
     get_collection,
     mark_schedule_ran,
     save_scan_asset_summaries,
-
-    # Sprint 8 actions
-    get_asset,
-    get_baseline,
-    get_scan_result_for_asset,
-    get_enabled_webhooks_for_event,
-    reserve_webhook_event,
-    mark_webhook_event_delivered,
+    list_webhooks,  # <-- added for debug visibility
 )
 
 BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
@@ -62,6 +49,31 @@ def _progress(total: int, done: int) -> Dict[str, Any]:
     done = max(0, min(int(done), total))
     pct = int((done / total) * 100)
     return {"total": total, "done": done, "percent": pct}
+
+
+def _emit_webhook_events(scan_id: str, phase: str) -> None:
+    """
+    Sprint 8: Event bus — emit webhook events based on scan results.
+    Adds strong logging so we can see WHY deliveries are missing (e.g., worker sees 0 webhooks).
+    Never breaks the scan.
+    """
+    try:
+        hooks = list_webhooks()
+        enabled = [h for h in hooks if h.get("enabled")]
+        print(
+            f"[run_scan_task] webhook emit phase={phase} scan_id={scan_id} "
+            f"hooks_total={len(hooks)} hooks_enabled={len(enabled)} "
+            f"(DB mismatch if 0 but API shows webhooks!)",
+            flush=True,
+        )
+    except Exception as e:
+        print(f"[run_scan_task] list_webhooks failed (phase={phase}): {e}", flush=True)
+
+    try:
+        out = deliver_events_for_scan(scan_id)
+        print(f"[run_scan_task] deliver_events_for_scan out={out} (phase={phase})", flush=True)
+    except Exception as e:
+        print(f"[run_scan_task] deliver_events_for_scan failed (phase={phase}): {e}", flush=True)
 
 
 def scan_target_with_timeout(target: str) -> Dict[str, Any]:
@@ -102,13 +114,13 @@ def run_scan_task(self, scan_id: str, targets: List[str]) -> Dict[str, Any]:
 
     total = len(targets)
     results: List[Dict[str, Any]] = []
+
     try:
         prog = _progress(total, 0)
         update_scan_progress(scan_id, status="running", progress=prog, error_text="")
         self.update_state(state="PROGRESS", meta=prog)
 
         for i, t in enumerate(targets, start=1):
-            # Log to worker output so you can see progress in docker logs
             print(f"[run_scan_task] scanning {i}/{total}: {t}", flush=True)
 
             results.append(scan_target_with_timeout(t))
@@ -123,15 +135,21 @@ def run_scan_task(self, scan_id: str, targets: List[str]) -> Dict[str, Any]:
 
             self.update_state(state="PROGRESS", meta=prog)
 
+        # Final persist
         summary = summarize_results(results)
         save_scan_results(scan_id, status="done", results=results, summary=summary)
         update_scan_progress(scan_id, status="done", progress=_progress(total, total), error_text="")
         update_scan_job(scan_id, job_state="SUCCESS", finished_at_iso=_iso_now())
+
         # Sprint 5: persist per-asset summaries for history
         try:
             save_scan_asset_summaries(scan_id, _iso_now(), results)
         except Exception as _e:
             print(f"[run_scan_task] save_scan_asset_summaries failed: {_e}", flush=True)
+
+        # Sprint 8: emit webhook events (best effort)
+        _emit_webhook_events(scan_id, phase="success")
+
         print(f"[run_scan_task] finished scan_id={scan_id} targets={total}", flush=True)
         return {"scan_id": scan_id, "count": len(results), "job_id": job_id}
 
@@ -139,9 +157,18 @@ def run_scan_task(self, scan_id: str, targets: List[str]) -> Dict[str, Any]:
         msg = str(e)
         prog = _progress(total, len(results))
         update_scan_progress(scan_id, status="failed", progress=prog, error_text=msg)
-        save_scan_results(scan_id, status="failed", results=results, summary=summarize_results(results) if results else {})
+        save_scan_results(
+            scan_id,
+            status="failed",
+            results=results,
+            summary=summarize_results(results) if results else {},
+        )
         update_scan_job(scan_id, job_state="FAILURE", finished_at_iso=_iso_now())
         print(f"[run_scan_task] FAILED scan_id={scan_id}: {msg}", flush=True)
+
+        # Sprint 8: still emit scan.completed/status=failed (best effort)
+        _emit_webhook_events(scan_id, phase="failure")
+
         raise
 
 
@@ -181,7 +208,10 @@ def enqueue_due_schedules() -> Dict[str, Any]:
             mark_schedule_ran(int(s["id"]), now_iso, int(s["interval_minutes"]), scan_id)
             enqueued += 1
 
-            print(f"[enqueue_due_schedules] enqueued scan_id={scan_id} job_id={res.id} collection_id={s['collection_id']}", flush=True)
+            print(
+                f"[enqueue_due_schedules] enqueued scan_id={scan_id} job_id={res.id} collection_id={s['collection_id']}",
+                flush=True,
+            )
 
         except Exception as e:
             print(f"[enqueue_due_schedules] error: {e}", flush=True)

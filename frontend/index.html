@@ -275,7 +275,7 @@
   <div class="wrap">
     <div class="top">
       <div class="brand">
-        <h1>Quantum / PQC Migration Tool</h1>
+        <h1>Quantum / PQC Migration Tool <span class="muted mono" style="font-size:12px;">SPRINT7-FULL</span></h1>
         <div class="sub">TLS / PKI posture + PQC readiness • Sprint 2 (Baseline + Diff)</div>
       </div>
       <div class="row" style="justify-content:flex-end; flex: 1;">
@@ -500,6 +500,7 @@ incomplete-chain.badssl.com</textarea>
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <div style="font-weight:700;">Results</div>
         <div class="muted" style="font-size:11px;">Expand a row for details (TLS, revocation, chain, findings).</div>
+        <div class="muted mono" id="resultsInfo" style="font-size:11px; margin-left:auto;">—</div>
       </div>
       <div style="margin-top:12px; overflow:auto;">
         <table>
@@ -528,6 +529,7 @@ incomplete-chain.badssl.com</textarea>
   // ---- Sprint 7: Job polling (Celery) ----
   let currentJobId = "";
   let jobPollTimer = null;
+  let lastScanRefreshAt = 0;
 
   function setJobBoxVisible(v){
     const box = document.getElementById("jobBox");
@@ -569,7 +571,11 @@ incomplete-chain.badssl.com</textarea>
 
     if (state === "PROGRESS" || state === "STARTED" || state === "PENDING"){
       if (currentScanId){
-        await loadResults(true);
+        const now = Date.now();
+        if ((now - lastScanRefreshAt) > 6000){
+          lastScanRefreshAt = now;
+          await loadResults(true);
+        }
       }
       return;
     }
@@ -605,9 +611,16 @@ incomplete-chain.badssl.com</textarea>
     jobPollTimer = setInterval(() => {
       tickJob(jobId).catch(e => {
         stopJobPoll();
+        console.warn('Job poll error', e);
+        if (String(e.message||'').includes('429')){
+          stopJobPoll();
+          setJobUI('THROTTLED', {});
+          setTimeout(()=>startJobPoll(jobId), 10000);
+          return;
+        }
         alert(`Job poll error: ${e.message}`);
       });
-    }, 1500);
+    }, 3000);
   }
 
   
@@ -677,9 +690,12 @@ incomplete-chain.badssl.com</textarea>
   }
 
 function headers(){
-    // If you enable API keys in backend, add here:
-    // return {"Content-Type":"application/json","X-API-Key": "..."}
-    return {"Content-Type":"application/json"};
+    const h = {"Content-Type":"application/json"};
+    try{
+      const k = localStorage.getItem('pqc_api_key') || "";
+      if (k) h["X-API-Key"] = k;
+    }catch(e){}
+    return h;
   }
 
   async function fetchJson(path, opts={}){
@@ -687,6 +703,14 @@ function headers(){
     const res = await fetch(url, { ...opts, headers: { ...headers(), ...(opts.headers||{}) } });
     if (!res.ok){
       const t = await res.text().catch(()=> "");
+      if (res.status === 429){
+        let msg = "Too many requests (429). Backing off…";
+        try{
+          const j = JSON.parse(t || "{}");
+          if (j && j.detail) msg = j.detail;
+        }catch(e){}
+        throw new Error(msg);
+      }
       throw new Error(`HTTP ${res.status}: ${t || res.statusText}`);
     }
     return await res.json();
@@ -1085,6 +1109,13 @@ function headers(){
     const d = r && r.__diff;
     if (!d) return "";
     if (d.no_baseline) return `<span class="badge warn">NO BASELINE</span>`;
+
+    const delta = (typeof d.score_delta === "number") ? d.score_delta : null;
+    const fmt = (n) => (Math.abs(n) >= 1 ? n.toFixed(1) : n.toFixed(2));
+
+    if (delta !== null && delta > 0) return `<span class="badge bad">REG +${fmt(delta)}</span>`;
+    if (delta !== null && delta < 0) return `<span class="badge ok">IMP ${fmt(delta)}</span>`;
+
     if (d.new_count > 0) return `<span class="badge bad">REG +${d.new_count}</span>`;
     if (d.resolved_count > 0) return `<span class="badge ok">IMP -${d.resolved_count}</span>`;
     return `<span class="badge">UNCHANGED</span>`;
@@ -1348,9 +1379,11 @@ function headers(){
     `;
   }
 
-  function renderResults(rows){
-    const results = Array.isArray(rows) ? rows : [];
+  function renderResults(results){
     const body = document.getElementById("resultsBody");
+    const info = document.getElementById("resultsInfo");
+    if (info) info.textContent = `Loaded ${results.length} result(s)`;
+    if (!body) return;
     if (!results.length){
       body.innerHTML = `<tr><td colspan="9" class="muted">No results yet.</td></tr>`;
       return;
@@ -1419,11 +1452,27 @@ function headers(){
       const k = keyForRow(r);
       const d = map.get(k);
       if (!d) { r.__diff = null; continue; }
+
       const newF = Array.isArray(d.new_findings) ? d.new_findings : [];
       const resF = Array.isArray(d.resolved_findings) ? d.resolved_findings : [];
       const unch = Array.isArray(d.unchanged_findings) ? d.unchanged_findings : [];
-      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || (!d.baseline_scan_id && (newF.length===0 && resF.length===0 && unch.length===0));
-      r.__diff = { new_count: newF.length, resolved_count: resF.length, no_baseline: nb };
+
+      // Prefer explicit flags from API if present. Otherwise infer from baseline info.
+      const hasBaseline =
+        (d.no_baseline === false) ||
+        !!d.baseline_scan_id ||
+        (d.baseline && (d.baseline.score !== null && d.baseline.score !== undefined)) ||
+        (d.baseline && (d.baseline.level !== null && d.baseline.level !== undefined));
+
+      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || !hasBaseline;
+
+      const delta = (typeof d.score_delta === "number") ? d.score_delta : (
+        (d.current && typeof d.current.score === "number" && d.baseline && typeof d.baseline.score === "number")
+          ? (d.current.score - d.baseline.score)
+          : null
+      );
+
+      r.__diff = { new_count: newF.length, resolved_count: resF.length, no_baseline: nb, score_delta: delta };
     }
   }
   function renderDiffPanel(){
@@ -1445,46 +1494,67 @@ function headers(){
       const newF = Array.isArray(d.new_findings) ? d.new_findings : [];
       const resF = Array.isArray(d.resolved_findings) ? d.resolved_findings : [];
       const unch = Array.isArray(d.unchanged_findings) ? d.unchanged_findings : [];
-      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || (!d.baseline_scan_id && (newF.length===0 && resF.length===0 && unch.length===0));
+
+      const hasBaseline =
+        (d.no_baseline === false) ||
+        !!d.baseline_scan_id ||
+        (d.baseline && (d.baseline.score !== null && d.baseline.score !== undefined)) ||
+        (d.baseline && (d.baseline.level !== null && d.baseline.level !== undefined));
+
+      const nb = !!d.no_baseline || !!d.no_baseline_for_asset || !hasBaseline;
+
+      const delta = (typeof d.score_delta === "number") ? d.score_delta : (
+        (d.current && typeof d.current.score === "number" && d.baseline && typeof d.baseline.score === "number")
+          ? (d.current.score - d.baseline.score)
+          : null
+      );
+
+      const isReg = !nb && ((newF.length>0) || (delta !== null && delta > 0));
+      const isImp = !nb && ((resF.length>0) || (delta !== null && delta < 0));
+      const isSame = !nb && !isReg && !isImp;
 
       if (nb) nob++;
-      else if (newF.length>0) reg++;
-      else if (resF.length>0) imp++;
+      else if (isReg) reg++;
+      else if (isImp) imp++;
       else same++;
 
-      if (diffFilterMode === "reg" && !(newF.length>0)) continue;
-      if (diffFilterMode === "imp" && !(resF.length>0)) continue;
+      if (diffFilterMode === "reg" && !isReg) continue;
+      if (diffFilterMode === "imp" && !isImp) continue;
+
+      const fmt = (n) => (Math.abs(n) >= 1 ? n.toFixed(1) : n.toFixed(2));
+      const deltaHtml = (delta === null) ? "" : `<span class="pill">${delta>0?"+":""}${fmt(delta)}</span>`;
 
       const tag = nb ? `<span class="pill warn">No baseline</span>` :
-                 (newF.length>0 ? `<span class="pill bad">Regressions: ${newF.length}</span>` :
-                  (resF.length>0 ? `<span class="pill ok">Improvements: ${resF.length}</span>` :
-                   `<span class="pill">Unchanged</span>`));
+                 (isReg ? `<span class="pill bad">Regression</span>` :
+                 (isImp ? `<span class="pill ok">Improvement</span>` :
+                          `<span class="pill">Unchanged</span>`));
 
-      let items = "";
-      if (newF.length){
-        items += `<div class="muted" style="margin-top:6px;">New findings</div><ul>${newF.slice(0,10).map(x=>`<li class="mono">${escapeHtml(x)}</li>`).join("")}${newF.length>10?`<li class="muted">+${newF.length-10} more…</li>`:""}</ul>`;
-      }
-      if (resF.length){
-        items += `<div class="muted" style="margin-top:6px;">Resolved</div><ul>${resF.slice(0,10).map(x=>`<li class="mono">${escapeHtml(x)}</li>`).join("")}${resF.length>10?`<li class="muted">+${resF.length-10} more…</li>`:""}</ul>`;
-      }
-      if (!newF.length && !resF.length && !nb){
-        items += `<div class="muted" style="margin-top:6px;">No changes vs baseline.</div>`;
-      }
+      const details = `
+        <div class="kvs">
+          <div>asset_key</div><div class="mono"><strong>${escapeHtml(asset)}</strong></div>
+          <div>new_findings</div><div class="mono">${escapeHtml(String(newF.length))}</div>
+          <div>resolved_findings</div><div class="mono">${escapeHtml(String(resF.length))}</div>
+          <div>unchanged_findings</div><div class="mono">${escapeHtml(String(unch.length))}</div>
+        </div>
+      `;
 
       cards.push(`
-        <div class="diffCard">
-          <div class="h">
-            <div class="asset">${escapeHtml(asset)}</div>
-            ${tag}
+        <div class="diffItem">
+          <div class="diffHead">
+            <div class="mono">${escapeHtml(asset)}</div>
+            <div class="row" style="gap:8px; align-items:center;">${tag}${deltaHtml}</div>
           </div>
-          ${items}
+          <details style="margin-top:8px;">
+            <summary>Details</summary>
+            ${details}
+          </details>
         </div>
       `);
     }
 
     document.getElementById("regCount").textContent = `Regressions: ${reg}`;
     document.getElementById("impCount").textContent = `Improvements: ${imp}`;
-    document.getElementById("noBaseCount").textContent = `No baseline: ${nob}`;
+    document.getElementById("nobCount").textContent = `No baseline: ${nob}`;
     document.getElementById("sameCount").textContent = `Unchanged: ${same}`;
     list.innerHTML = cards.join("") || `<div class="muted">No items for this filter.</div>`;
   }
@@ -1632,7 +1702,7 @@ function headers(){
       try{
         const st = await fetchJson(`/scans/${currentScanId}`);
         setProgress(st.progress);
-        const kind = (st.status === "failed") ? "bad" : (st.status === "completed" ? "ok" : "");
+        const kind = (st.status === "failed") ? "bad" : ((st.status === "completed" || st.status === "done") ? "ok" : "");
         setStatus(st.status, kind);
 
         if (st.status === "running"){
@@ -1640,7 +1710,7 @@ function headers(){
           await loadResults(true);
         }
 
-        if (st.status === "completed" || st.status === "failed"){
+        if (st.status === "completed" || st.status === "done" || st.status === "failed"){
           stopPolling();
           await loadResults(false);
         }
@@ -1769,7 +1839,7 @@ function headers(){
     renderDiffPanel();
     renderResults(
       (lastResults?.results || []).filter(r =>
-        r.__diff && !r.__diff.no_baseline && r.__diff.new_count > 0
+        r.__diff && !r.__diff.no_baseline && (r.__diff.new_count > 0 || (typeof r.__diff.score_delta === "number" && r.__diff.score_delta > 0))
       )
     );
   });
@@ -1779,7 +1849,7 @@ function headers(){
     renderDiffPanel();
     renderResults(
       (lastResults?.results || []).filter(r =>
-        r.__diff && !r.__diff.no_baseline && r.__diff.resolved_count > 0
+        r.__diff && !r.__diff.no_baseline && (r.__diff.resolved_count > 0 || (typeof r.__diff.score_delta === "number" && r.__diff.score_delta < 0))
       )
     );
   });
@@ -2210,5 +2280,65 @@ function headers(){
           </div>
         </div>
 
+<!-- Integrations Modal (Sprint 8) -->
+<div class="modal" id="integrationsModal" style="display:none;">
+  <div class="modal-inner" style="max-width: 860px;">
+    <div class="modal-header">
+      <div>
+        <div class="h2">Integrations</div>
+        <div class="muted">Configure outgoing webhooks for scan events (no PDFs).</div>
+      </div>
+      <button class="btn" id="btnCloseIntegrations">Close</button>
+    </div>
+
+    <div class="grid2" style="margin-top:12px;">
+      <div class="card">
+        <div class="h3">Add / Update Webhook</div>
+        <div class="row">
+          <div class="field">
+            <label>Name</label>
+            <input id="whName" placeholder="e.g. Slack/Jira local" />
+          </div>
+          <div class="field">
+            <label>URL</label>
+            <input id="whUrl" placeholder="https://example.com/webhook" />
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label>Secret (optional)</label>
+            <input id="whSecret" placeholder="HMAC secret (optional)" />
+          </div>
+          <div class="field">
+            <label>Events</label>
+            <input id="whEvents" placeholder="* or scan.completed,cert.expired,asset.regressed" />
+          </div>
+        </div>
+        <div class="row">
+          <label style="display:flex;align-items:center;gap:8px;">
+            <input type="checkbox" id="whEnabled" checked />
+            Enabled
+          </label>
+          <div style="flex:1"></div>
+          <button class="btn primary" id="btnSaveWebhook">Save</button>
+        </div>
+        <div class="muted" style="margin-top:10px;">
+          Tip: Use <code>*</code> to receive all events. This UI is safe: if no webhook is configured, nothing is sent.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="h3">Webhooks</div>
+        <div id="webhookList" class="table" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div class="h3">Recent Deliveries</div>
+      <div class="muted">Latest webhook delivery attempts (deduped).</div>
+      <div id="webhookEvents" class="table" style="margin-top:10px;"></div>
+    </div>
+  </div>
+</div>
 </body>
 </html>

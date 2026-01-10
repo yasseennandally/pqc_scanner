@@ -299,6 +299,7 @@
         <button class="btn ghost" id="dashBtn">Dashboard</button>
         <button class="btn ghost" id="collectionsBtn">Collections</button>
         <button class="btn ghost" id="schedulesBtn">Schedules</button>
+        <button class="btn ghost" id="integrationsBtn">Integrations</button>
         <button class="btn ghost" id="fixNextBtn" disabled>Fix Next</button>
         </div>
       </div>
@@ -675,11 +676,13 @@ incomplete-chain.badssl.com</textarea>
     try{ localStorage.setItem(LS_LAST_SCAN_KEY, String(id)); }catch(e){}
   }
   function getLastScanId(){
-    try{
-      const v = localStorage.getItem(LS_LAST_SCAN_KEY);
-      return v ? parseInt(v, 10) : null;
-    }catch(e){ return null; }
-  }
+  try{
+    const v = localStorage.getItem(LS_LAST_SCAN_KEY);
+    // Sprint 7+ uses UUID scan IDs, not integers
+    return v ? String(v) : null;
+  }catch(e){ return null; }
+}
+
   function isAutoLoadEnabled(){
     try{
       return localStorage.getItem(LS_AUTOLOAD_KEY) === "true";
@@ -2277,5 +2280,290 @@ function headers(){
           </div>
         </div>
 
+<!-- Sprint 8: Integrations (Webhooks) -->
+<div class="modalBackdrop" id="integrationsBackdrop" style="display:none;">
+  <div class="modalBox" style="max-width: 980px;" id="integrationsBox">
+    <div class="modalHeader">
+      <div class="modalTitle">Integrations</div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn ghost" id="integrationsRefreshBtn">Refresh</button>
+        <button class="btn" id="integrationsCloseBtn">Close</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px; align-items:flex-start;">
+      <div style="flex:1; min-width: 340px;">
+        <div class="h2">Register / Update Webhook</div>
+
+        <div class="grid2" style="margin-top:8px;">
+          <div>
+            <div class="label">Name</div>
+            <input id="wh_name" class="input" placeholder="local" />
+          </div>
+          <div>
+            <div class="label">URL</div>
+            <input id="wh_url" class="input" placeholder="http://host.docker.internal:9999/" />
+          </div>
+
+          <div>
+            <div class="label">Secret (optional)</div>
+            <input id="wh_secret" class="input" placeholder="shared-secret" />
+          </div>
+          <div>
+            <div class="label">Events</div>
+            <input id="wh_events" class="input" placeholder="*  (or: scan.completed, cert.expired)" />
+            <div class="tiny mono" style="opacity:.8;margin-top:4px;">Use * for all events. Or comma-separated list.</div>
+          </div>
+
+          <div style="display:flex; gap:10px; align-items:center;">
+            <label class="tiny" style="display:flex; gap:8px; align-items:center;">
+              <input type="checkbox" id="wh_enabled" checked /> Enabled
+            </label>
+          </div>
+          <div style="display:flex; gap:8px; justify-content:flex-end;">
+            <button class="btn" id="wh_saveBtn">Save</button>
+          </div>
+        </div>
+
+        <div id="wh_msg" class="tiny mono" style="margin-top:8px;"></div>
+
+        <div class="h2" style="margin-top:14px;">Registered Webhooks</div>
+        <div id="wh_table_wrap" style="margin-top:8px;"></div>
+      </div>
+
+      <div style="flex:1; min-width: 340px;">
+        <div class="h2">Recent Deliveries</div>
+        <div class="tiny mono" style="opacity:.8;margin-top:4px;">
+          Deliveries appear after a scan completes (event_type: scan.completed) and when other event rules fire.
+        </div>
+        <div id="wh_events_wrap" style="margin-top:8px;"></div>
+        <div id="wh_events_msg" class="tiny mono" style="margin-top:8px;"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
 </body>
+<script>
+/* Sprint 8: Integrations (Event Nervous System)
+   - Manage outbound webhooks
+   - Show recent webhook deliveries from SQLite
+   Notes:
+   - This UI is intentionally self-contained and does NOT rely on other app state.
+*/
+(function(){
+  function el(id){ return document.getElementById(id); }
+  function esc(s){
+    try { return escapeHtml(String(s ?? "")); } catch(e){ return String(s ?? ""); }
+  }
+  function show(open){
+    const back = el("integrationsBackdrop");
+    if (!back) return;
+    back.style.display = open ? "flex" : "none";
+  }
+  function setMsg(id, msg){
+    const n = el(id);
+    if (!n) return;
+    n.textContent = msg || "";
+  }
+  function parseEvents(s){
+    const raw = String(s || "").trim();
+    if (!raw || raw === "*") return ["*"];
+    return raw.split(",").map(x=>x.trim()).filter(Boolean);
+  }
+
+  // cache for edit buttons
+  const cache = { webhooks: [], events: [] };
+
+  function renderWebhooks(items){
+    cache.webhooks = Array.isArray(items) ? items : [];
+    const wrap = el("wh_table_wrap");
+    if (!wrap) return;
+
+    if (!cache.webhooks.length){
+      wrap.innerHTML = '<div class="tiny mono" style="opacity:.8">No webhooks registered yet.</div>';
+      return;
+    }
+
+    const rows = cache.webhooks.map(w=>{
+      const events = Array.isArray(w.events) ? w.events.join(", ") : (w.events ?? "");
+      const enabled = !!w.enabled;
+      return `
+        <tr>
+          <td class="mono">${esc(w.name)}</td>
+          <td class="mono" style="max-width:320px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(w.url)}">${esc(w.url)}</td>
+          <td class="mono">${esc(events)}</td>
+          <td class="mono">${enabled ? "yes" : "no"}</td>
+          <td style="white-space:nowrap; text-align:right;">
+            <button class="btn ghost" onclick="window.__whEdit(${Number(w.id)})">Edit</button>
+            <button class="btn danger" onclick="window.__whDelete(${Number(w.id)})">Delete</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>URL</th>
+            <th>Events</th>
+            <th>Enabled</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  function renderEvents(items){
+    cache.events = Array.isArray(items) ? items : [];
+    const wrap = el("wh_events_wrap");
+    if (!wrap) return;
+
+    if (!cache.events.length){
+      wrap.innerHTML = '<div class="tiny mono" style="opacity:.8">No deliveries yet. Run a scan to generate events.</div>';
+      return;
+    }
+
+    const rows = cache.events.map(ev=>{
+      const ts = ev.created_at || ev.delivered_at || "";
+      const http = (ev.http_status !== undefined && ev.http_status !== null) ? String(ev.http_status) : "";
+      const status = ev.status || "";
+      const err = ev.error_text || ev.last_error || "";
+      const whId = ev.webhook_id ?? "";
+      return `
+        <tr>
+          <td class="mono" title="${esc(ts)}" style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(ts)}</td>
+          <td class="mono">${esc(ev.event_type || "")}</td>
+          <td class="mono">${esc(status)}${http ? " / " + esc(http) : ""}</td>
+          <td class="mono">${esc(whId)}</td>
+          <td class="mono" style="max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${esc(err)}">${esc(err)}</td>
+        </tr>
+      `;
+    }).join("");
+
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Event</th>
+            <th>Status</th>
+            <th>Webhook</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  async function loadWebhooks(){
+    setMsg("wh_msg", "Loading webhooks...");
+    const data = await fetchJson("/integrations/webhooks");
+    const items = _asList(data);
+    renderWebhooks(items);
+    setMsg("wh_msg", `Loaded ${items.length} webhooks.`);
+  }
+
+  async function loadWebhookEvents(){
+    setMsg("wh_events_msg", "Loading deliveries...");
+    const data = await fetchJson("/integrations/webhook-events?limit=50");
+    const items = _asList(data);
+    renderEvents(items);
+    setMsg("wh_events_msg", `Loaded ${items.length} deliveries.`);
+  }
+
+  async function refreshAll(){
+    await loadWebhooks();
+    await loadWebhookEvents();
+  }
+
+  function fillForm(w){
+    el("wh_name").value = w?.name ?? "";
+    el("wh_url").value = w?.url ?? "";
+    el("wh_secret").value = w?.secret ?? "";
+    el("wh_events").value = Array.isArray(w?.events) ? w.events.join(", ") : (w?.events ?? "*");
+    el("wh_enabled").checked = !!w?.enabled;
+  }
+
+  async function saveWebhook(){
+    const name = (el("wh_name").value || "").trim();
+    const url = (el("wh_url").value || "").trim();
+    const secret = (el("wh_secret").value || "").trim();
+    const events = parseEvents(el("wh_events").value || "*");
+    const enabled = !!el("wh_enabled").checked;
+
+    if (!name) throw new Error("Webhook name is required.");
+    if (!url) throw new Error("Webhook URL is required.");
+
+    setMsg("wh_msg", "Saving...");
+    await fetchJson("/integrations/webhooks", {
+      method: "POST",
+      body: JSON.stringify({ name, url, secret, events, enabled })
+    });
+    setMsg("wh_msg", "Saved.");
+    await refreshAll();
+  }
+
+  async function deleteWebhook(id){
+    if (!confirm("Delete this webhook?")) return;
+    setMsg("wh_msg", "Deleting...");
+    await fetchJson(`/integrations/webhooks/${id}`, { method: "DELETE" });
+    setMsg("wh_msg", "Deleted.");
+    await refreshAll();
+  }
+
+  function open(){
+    show(true);
+    // Default form values (safe defaults for Docker on Windows/Mac)
+    if (!el("wh_url").value) el("wh_url").value = "http://host.docker.internal:9999/";
+    if (!el("wh_events").value) el("wh_events").value = "*";
+    refreshAll().catch(e=>{
+      setMsg("wh_msg", `Load failed: ${e?.message || e}`);
+      console.warn(e);
+    });
+  }
+
+  // expose small helpers for inline onclick
+  window.__whEdit = function(id){
+    const w = cache.webhooks.find(x => Number(x.id) === Number(id));
+    if (w) fillForm(w);
+  };
+  window.__whDelete = function(id){
+    deleteWebhook(id).catch(e=>{
+      setMsg("wh_msg", `Delete failed: ${e?.message || e}`);
+      console.warn(e);
+    });
+  };
+
+  // wiring
+  const openBtn = el("integrationsBtn");
+  if (openBtn) openBtn.addEventListener("click", open);
+  const closeBtn = el("integrationsCloseBtn");
+  if (closeBtn) closeBtn.addEventListener("click", ()=>show(false));
+  const refreshBtn = el("integrationsRefreshBtn");
+  if (refreshBtn) refreshBtn.addEventListener("click", ()=>refreshAll().catch(e=>{
+    setMsg("wh_msg", `Refresh failed: ${e?.message || e}`);
+    console.warn(e);
+  }));
+  const saveBtn = el("wh_saveBtn");
+  if (saveBtn) saveBtn.addEventListener("click", ()=>saveWebhook().catch(e=>{
+    setMsg("wh_msg", `Save failed: ${e?.message || e}`);
+    console.warn(e);
+  }));
+
+  const back = el("integrationsBackdrop");
+  const box = el("integrationsBox");
+  if (back) back.addEventListener("click", (e)=>{ if (e.target === back) show(false); });
+  if (box) box.addEventListener("click", (e)=>e.stopPropagation());
+})();
+</script>
+
+
 </html>
