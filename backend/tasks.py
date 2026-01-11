@@ -10,7 +10,7 @@ from celery import Celery
 
 from scanner import scan_host, parse_target
 from policy import summarize_results
-from events import deliver_events_for_scan
+from events import deliver_events_for_scan, retry_pending_deliveries
 from db import (
     save_scan_row,
     update_scan_progress,
@@ -130,7 +130,7 @@ def run_scan_task(self, scan_id: str, targets: List[str]) -> Dict[str, Any]:
             # Persist frequently for good UX
             if i == total or i % 2 == 0:
                 summary = summarize_results(results)
-                save_scan_results(scan_id, status="running" if i < total else "done", results=results, summary=summary)
+                save_scan_results(scan_id, results=results, summary=summary, status="running" if i < total else "done", error_text="")
                 update_scan_progress(scan_id, status="running" if i < total else "done", progress=prog, error_text="")
 
             self.update_state(state="PROGRESS", meta=prog)
@@ -225,5 +225,18 @@ celery_app.conf.beat_schedule = {
     "enqueue-due-schedules-every-60s": {
         "task": "enqueue_due_schedules",
         "schedule": 60.0,
-    }
+    },
+    "retry-webhook-deliveries-every-60s": {
+        "task": "retry_webhook_deliveries",
+        "schedule": 60.0,
+    },
 }
+
+
+
+@celery_app.task(name="retry_webhook_deliveries")
+def retry_webhook_deliveries():
+    try:
+        return retry_pending_deliveries(limit=50, max_attempts=int(os.environ.get("WEBHOOK_MAX_ATTEMPTS","5") or 5))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
