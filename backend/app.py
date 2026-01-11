@@ -15,7 +15,6 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from events import deliver_events_for_scan, deliver_test_ping
 
-
 from scanner import scan_host, parse_target
 from policy import summarize_results
 from migration import build_tls_migration_plan
@@ -1298,11 +1297,13 @@ def api_upsert_webhook(body: WebhookIn):
 
 @app.post("/integrations/webhooks/{webhook_id}/test")
 def api_test_webhook(webhook_id: int):
+    # Never crash the API; this endpoint is for debugging integrations.
     try:
         return deliver_test_ping(int(webhook_id))
     except KeyError:
         raise HTTPException(status_code=404, detail="webhook not found")
-
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 @app.delete("/integrations/webhooks/{webhook_id}")
 def api_delete_webhook(webhook_id: int):

@@ -63,7 +63,7 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
             events.append({
                 "event_type": "cert.expired",
                 "dedupe_key": _sha256_hex(f"cert.expired:{ak}:{fp}"),
-                "payload": {"scan_id": scan_id, "asset_key": ak, "not_after": fp, "findings": sorted(rule_ids)},
+                "payload": {"scan_id": scan_id, "asset_key": ak, "facts": facts, "finding_ids": sorted(rule_ids)},
             })
 
         if "CERT_EXPIRING_SOON" in rule_ids:
@@ -71,7 +71,7 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
             events.append({
                 "event_type": "cert.expiring_soon",
                 "dedupe_key": _sha256_hex(f"cert.expiring_soon:{ak}:{fp}"),
-                "payload": {"scan_id": scan_id, "asset_key": ak, "facts": facts, "findings": sorted(rule_ids)},
+                "payload": {"scan_id": scan_id, "asset_key": ak, "facts": facts, "finding_ids": sorted(rule_ids)},
             })
 
         if "PQC_RSA_ENDPOINT" in rule_ids or "PQC_EC_ENDPOINT" in rule_ids:
@@ -104,7 +104,7 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
     return events
 
 def _post_json(url: str, body: bytes, event_type: str, secret: str = "", timeout_s: int = 10) -> int:
-    headers = {"Content-Type":"application/json","X-PQC-Event":event_type}
+    headers = {"Content-Type": "application/json", "X-PQC-Event": event_type}
     if secret:
         headers["X-PQC-Signature"] = _hmac_sig(secret, body)
     req = request.Request(url, data=body, headers=headers, method="POST")
@@ -113,12 +113,13 @@ def _post_json(url: str, body: bytes, event_type: str, secret: str = "", timeout
 
 def deliver_events_for_scan(scan_id: str) -> Dict[str, Any]:
     hooks = [h for h in list_webhooks() if h.get("enabled")]
-    if not hooks:
-        return {"delivered": 0, "attempted": 0, "hooks": 0, "events": 0}
-
     events = build_events_for_scan(scan_id)
-    delivered = 0
+
+    if not hooks or not events:
+        return {"attempted": 0, "sent": 0, "hooks": len(hooks), "events": len(events)}
+
     attempted = 0
+    sent = 0
 
     for ev in events:
         et = ev["event_type"]
@@ -127,11 +128,7 @@ def deliver_events_for_scan(scan_id: str) -> Dict[str, Any]:
             if "*" not in allowed and et not in allowed:
                 continue
 
-            payload = {
-                "event_type": et,
-                "ts": int(time.time()),
-                "data": ev.get("payload") or {},
-            }
+            payload = {"event_type": et, "ts": int(time.time()), "data": ev.get("payload") or {}}
             dedupe_key = str(ev.get("dedupe_key") or "")
 
             row_id = record_webhook_event(
@@ -151,13 +148,14 @@ def deliver_events_for_scan(scan_id: str) -> Dict[str, Any]:
                 bump_webhook_attempt(row_id)
                 code = _post_json(str(wh.get("url") or ""), body, et, secret=str(wh.get("secret") or ""), timeout_s=10)
                 update_webhook_event(row_id, status="sent", http_status=code, error_text="")
-                delivered += 1
+                sent += 1
             except urlerror.HTTPError as e:
-                update_webhook_event(row_id, status="failed", http_status=int(getattr(e, "code", 0) or 0), error_text=str(e))
+                code = int(getattr(e, "code", 0) or 0)
+                update_webhook_event(row_id, status="failed", http_status=code, error_text=str(e))
             except Exception as e:
                 update_webhook_event(row_id, status="failed", http_status=0, error_text=str(e))
 
-    return {"delivered": delivered, "attempted": attempted, "hooks": len(hooks), "events": len(events)}
+    return {"attempted": attempted, "sent": sent, "hooks": len(hooks), "events": len(events)}
 
 def deliver_test_ping(webhook_id: int) -> dict:
     hooks = {int(h["id"]): h for h in list_webhooks()}
@@ -169,8 +167,7 @@ def deliver_test_ping(webhook_id: int) -> dict:
     et = "test.ping"
     payload = {"event_type": et, "ts": int(time.time()), "data": {"message": "pong", "nonce": nonce}}
 
-    # UNIQUE every time -> never dedupes
-    dedupe_key = hashlib.sha256(f"test.ping:{webhook_id}:{nonce}".encode("utf-8")).hexdigest()
+    dedupe_key = _sha256_hex(f"test.ping:{webhook_id}:{nonce}")
 
     row_id = record_webhook_event(
         webhook_id=int(webhook_id),
@@ -185,7 +182,7 @@ def deliver_test_ping(webhook_id: int) -> dict:
 
     body = json.dumps(payload).encode("utf-8")
     try:
-        # send like your normal delivery function does
+        bump_webhook_attempt(row_id)
         code = _post_json(str(wh.get("url") or ""), body, et, secret=str(wh.get("secret") or ""), timeout_s=10)
         update_webhook_event(row_id, status="sent", http_status=code, error_text="")
         return {"ok": True, "row_id": row_id, "http_status": code}
@@ -196,6 +193,7 @@ def deliver_test_ping(webhook_id: int) -> dict:
 def retry_pending_deliveries(limit: int = 50, max_attempts: int = 5) -> Dict[str, Any]:
     hooks = {int(h["id"]): h for h in list_webhooks() if h.get("enabled")}
     pending = list_pending_webhook_events(limit=limit, max_attempts=max_attempts)
+
     retried = 0
     sent = 0
 
@@ -203,9 +201,11 @@ def retry_pending_deliveries(limit: int = 50, max_attempts: int = 5) -> Dict[str
         wh = hooks.get(int(ev["webhook_id"]))
         if not wh:
             continue
+
         et = str(ev["event_type"])
         payload = ev.get("payload") or {}
         body = json.dumps(payload).encode("utf-8")
+
         try:
             bump_webhook_attempt(int(ev["id"]))
             code = _post_json(str(wh.get("url") or ""), body, et, secret=str(wh.get("secret") or ""), timeout_s=10)
@@ -213,6 +213,7 @@ def retry_pending_deliveries(limit: int = 50, max_attempts: int = 5) -> Dict[str
             sent += 1
         except Exception as e:
             update_webhook_event(int(ev["id"]), status="failed", http_status=0, error_text=str(e))
+
         retried += 1
 
     return {"pending": len(pending), "retried": retried, "sent": sent}
