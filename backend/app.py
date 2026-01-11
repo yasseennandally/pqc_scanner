@@ -13,6 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
+from events import deliver_events_for_scan, deliver_test_ping
+
 
 from scanner import scan_host, parse_target
 from policy import summarize_results
@@ -1278,15 +1280,6 @@ class WebhookIn(BaseModel):
     enabled: bool = True
 
 
-@app.get("/integrations/webhook-events")
-def api_list_webhook_events(limit: int = 50):
-    try:
-        return list_webhook_events(limit=limit)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"webhook-events failed: {e}")
-
-
-
 @app.post("/integrations/webhooks")
 def api_upsert_webhook(body: WebhookIn):
     try:
@@ -1301,6 +1294,14 @@ def api_upsert_webhook(body: WebhookIn):
         return {"ok": True, "webhook": w}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/integrations/webhooks/{webhook_id}/test")
+def api_test_webhook(webhook_id: int):
+    try:
+        return deliver_test_ping(int(webhook_id))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="webhook not found")
 
 
 @app.delete("/integrations/webhooks/{webhook_id}")

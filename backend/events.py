@@ -4,41 +4,35 @@ import hashlib
 import hmac
 import json
 import time
-from typing import Any, Dict, List, Optional
+import uuid
+from typing import Any, Dict, List
 from urllib import request, error as urlerror
 
 from db import (
     load_scan_row,
     list_webhooks,
     record_webhook_event,
+    bump_webhook_attempt,
     update_webhook_event,
     get_baseline,
+    list_pending_webhook_events,
 )
-
 
 def _sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8", errors="ignore")).hexdigest()
-
 
 def _hmac_sig(secret: str, body: bytes) -> str:
     if not secret:
         return ""
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
-
-def _event_dedupe_key(event_type: str, asset_key: str, fingerprint: str = "") -> str:
-    base = f"{event_type}:{asset_key}:{fingerprint}"
-    return _sha256_hex(base)
-
-
-def _extract_finding_ids(result: dict) -> List[str]:
-    ids: List[str] = []
+def _extract_rule_ids(result: dict) -> List[str]:
+    out: List[str] = []
     for f in (result.get("findings") or []):
-        rid = str((f or {}).get("rule_id") or "")
+        rid = (f or {}).get("rule_id")
         if rid:
-            ids.append(rid)
-    return ids
-
+            out.append(str(rid))
+    return out
 
 def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
     scan = load_scan_row(scan_id)
@@ -46,110 +40,85 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
         return []
 
     results = scan.get("results") or []
-    created_at = scan.get("created_at")
-    created_at_str = created_at.isoformat() + "Z" if hasattr(created_at, "isoformat") else str(created_at)
+    summary = scan.get("summary") or {}
+    status = scan.get("status") or ""
 
     events: List[Dict[str, Any]] = []
-    # scan.completed: always
-    events.append(
-        {
-            "event_type": "scan.completed",
-            "scan_id": scan_id,
-            "asset_key": "",
-            "severity": "info",
-            "rule_id": "",
-            "dedupe_key": _event_dedupe_key("scan.completed", scan_id, ""),
-            "payload": {
-                "scan_id": scan_id,
-                "status": scan.get("status"),
-                "created_at": created_at_str,
-                "summary": scan.get("summary") or {},
-            },
-        }
-    )
 
-    # Per-target events
+    events.append({
+        "event_type": "scan.completed",
+        "dedupe_key": _sha256_hex(f"scan.completed:{scan_id}"),
+        "payload": {"scan_id": scan_id, "status": status, "summary": summary},
+    })
+
     for r in results:
         host = str(r.get("host") or "")
         port = int(r.get("port") or 443)
-        asset_key = f"{host}:{port}"
+        ak = f"{host}:{port}"
+        rule_ids = set(_extract_rule_ids(r))
+        facts = r.get("facts") or {}
 
-        finding_ids = _extract_finding_ids(r)
-        fid_sorted = sorted(set(finding_ids))
+        if "CERT_EXPIRED" in rule_ids:
+            fp = str(facts.get("not_after") or "")
+            events.append({
+                "event_type": "cert.expired",
+                "dedupe_key": _sha256_hex(f"cert.expired:{ak}:{fp}"),
+                "payload": {"scan_id": scan_id, "asset_key": ak, "not_after": fp, "findings": sorted(rule_ids)},
+            })
 
-        # Cert expired / expiring soon: based on rule ids already in your findings
-        if "CERT_EXPIRED" in fid_sorted:
-            not_after = str((r.get("facts") or {}).get("not_after") or "")
-            events.append(
-                {
-                    "event_type": "cert.expired",
-                    "scan_id": scan_id,
-                    "asset_key": asset_key,
-                    "severity": "high",
-                    "rule_id": "CERT_EXPIRED",
-                    "dedupe_key": _event_dedupe_key("cert.expired", asset_key, not_after),
-                    "payload": {"scan_id": scan_id, "asset_key": asset_key, "not_after": not_after, "findings": fid_sorted},
-                }
-            )
+        if "CERT_EXPIRING_SOON" in rule_ids:
+            fp = f"{facts.get('not_after','')}:{facts.get('days_until_expiry','')}"
+            events.append({
+                "event_type": "cert.expiring_soon",
+                "dedupe_key": _sha256_hex(f"cert.expiring_soon:{ak}:{fp}"),
+                "payload": {"scan_id": scan_id, "asset_key": ak, "facts": facts, "findings": sorted(rule_ids)},
+            })
 
-        if "CERT_EXPIRING_SOON" in fid_sorted:
-            not_after = str((r.get("facts") or {}).get("not_after") or "")
-            days = (r.get("facts") or {}).get("days_until_expiry")
-            fp = f"{not_after}:{days}"
-            events.append(
-                {
-                    "event_type": "cert.expiring_soon",
-                    "scan_id": scan_id,
-                    "asset_key": asset_key,
-                    "severity": "medium",
-                    "rule_id": "CERT_EXPIRING_SOON",
-                    "dedupe_key": _event_dedupe_key("cert.expiring_soon", asset_key, fp),
-                    "payload": {"scan_id": scan_id, "asset_key": asset_key, "not_after": not_after, "days_until_expiry": days, "findings": fid_sorted},
-                }
-            )
+        if "PQC_RSA_ENDPOINT" in rule_ids or "PQC_EC_ENDPOINT" in rule_ids:
+            sigs = sorted([x for x in ("PQC_RSA_ENDPOINT","PQC_EC_ENDPOINT") if x in rule_ids])
+            fp = ",".join(sigs)
+            events.append({
+                "event_type": "pqc.not_ready",
+                "dedupe_key": _sha256_hex(f"pqc.not_ready:{ak}:{fp}"),
+                "payload": {"scan_id": scan_id, "asset_key": ak, "signals": sigs},
+            })
 
-        # Regression vs baseline: compare finding ids with baseline scan (if exists)
-        bl = get_baseline(asset_key)
-        if bl and bl.get("baseline_scan_id"):
-            base_scan = load_scan_row(bl["baseline_scan_id"])
-            base_results = base_scan.get("results") if base_scan else []
-            base_for_asset = None
-            for br in base_results or []:
-                if str(br.get("host") or "") == host and int(br.get("port") or 443) == port:
-                    base_for_asset = br
-                    break
-            if base_for_asset:
-                base_ids = sorted(set(_extract_finding_ids(base_for_asset)))
-                new_ids = sorted(set(fid_sorted) - set(base_ids))
-                if new_ids:
-                    fingerprint = ",".join(new_ids)
-                    events.append(
-                        {
-                            "event_type": "asset.regressed",
-                            "scan_id": scan_id,
-                            "asset_key": asset_key,
-                            "severity": "high",
-                            "rule_id": "",
-                            "dedupe_key": _event_dedupe_key("asset.regressed", asset_key, fingerprint),
-                            "payload": {
-                                "scan_id": scan_id,
-                                "asset_key": asset_key,
-                                "baseline_scan_id": bl["baseline_scan_id"],
-                                "new_finding_ids": new_ids,
-                            },
-                        }
-                    )
+        base = get_baseline(ak)
+        if base and base.get("baseline_scan_id"):
+            base_scan = load_scan_row(str(base["baseline_scan_id"]))
+            base_rules: set[str] = set()
+            if base_scan:
+                for br in (base_scan.get("results") or []):
+                    if f"{br.get('host')}:{int(br.get('port') or 443)}" == ak:
+                        base_rules = set(_extract_rule_ids(br))
+                        break
+            new_rules = sorted(rule_ids - base_rules)
+            if new_rules:
+                fp = ",".join(new_rules)
+                events.append({
+                    "event_type": "scan.regression",
+                    "dedupe_key": _sha256_hex(f"scan.regression:{ak}:{fp}"),
+                    "payload": {"scan_id": scan_id, "asset_key": ak, "baseline_scan_id": base["baseline_scan_id"], "new_finding_ids": new_rules},
+                })
 
     return events
 
+def _post_json(url: str, body: bytes, event_type: str, secret: str = "", timeout_s: int = 10) -> int:
+    headers = {"Content-Type":"application/json","X-PQC-Event":event_type}
+    if secret:
+        headers["X-PQC-Signature"] = _hmac_sig(secret, body)
+    req = request.Request(url, data=body, headers=headers, method="POST")
+    with request.urlopen(req, timeout=timeout_s) as resp:
+        return int(getattr(resp, "status", 200) or 200)
 
 def deliver_events_for_scan(scan_id: str) -> Dict[str, Any]:
     hooks = [h for h in list_webhooks() if h.get("enabled")]
     if not hooks:
-        return {"delivered": 0, "hooks": 0}
+        return {"delivered": 0, "attempted": 0, "hooks": 0, "events": 0}
 
     events = build_events_for_scan(scan_id)
     delivered = 0
+    attempted = 0
 
     for ev in events:
         et = ev["event_type"]
@@ -160,35 +129,27 @@ def deliver_events_for_scan(scan_id: str) -> Dict[str, Any]:
 
             payload = {
                 "event_type": et,
-                "scan_id": ev.get("scan_id"),
-                "asset_key": ev.get("asset_key"),
-                "severity": ev.get("severity"),
-                "rule_id": ev.get("rule_id"),
                 "ts": int(time.time()),
                 "data": ev.get("payload") or {},
             }
-            body = json.dumps(payload).encode("utf-8")
-            sig = _hmac_sig(wh.get("secret") or "", body)
-
             dedupe_key = str(ev.get("dedupe_key") or "")
-            row_id = record_webhook_event(wh["id"], et, dedupe_key, payload, status="queued")
+
+            row_id = record_webhook_event(
+                webhook_id=int(wh["id"]),
+                event_type=et,
+                dedupe_key=dedupe_key,
+                payload=payload,
+                status="queued",
+                max_attempts=5,
+            )
             if row_id is None:
-                # deduped
                 continue
 
+            attempted += 1
+            body = json.dumps(payload).encode("utf-8")
             try:
-                req = request.Request(
-                    wh["url"],
-                    data=body,
-                    headers={
-                        "Content-Type": "application/json",
-                        "X-PQC-Event": et,
-                        "X-PQC-Signature": sig,
-                    },
-                    method="POST",
-                )
-                with request.urlopen(req, timeout=10) as resp:
-                    code = int(getattr(resp, "status", 200))
+                bump_webhook_attempt(row_id)
+                code = _post_json(str(wh.get("url") or ""), body, et, secret=str(wh.get("secret") or ""), timeout_s=10)
                 update_webhook_event(row_id, status="sent", http_status=code, error_text="")
                 delivered += 1
             except urlerror.HTTPError as e:
@@ -196,4 +157,62 @@ def deliver_events_for_scan(scan_id: str) -> Dict[str, Any]:
             except Exception as e:
                 update_webhook_event(row_id, status="failed", http_status=0, error_text=str(e))
 
-    return {"delivered": delivered, "hooks": len(hooks), "events": len(events)}
+    return {"delivered": delivered, "attempted": attempted, "hooks": len(hooks), "events": len(events)}
+
+def deliver_test_ping(webhook_id: int) -> dict:
+    hooks = {int(h["id"]): h for h in list_webhooks()}
+    wh = hooks.get(int(webhook_id))
+    if not wh:
+        raise KeyError("webhook not found")
+
+    nonce = str(uuid.uuid4())
+    et = "test.ping"
+    payload = {"event_type": et, "ts": int(time.time()), "data": {"message": "pong", "nonce": nonce}}
+
+    # UNIQUE every time -> never dedupes
+    dedupe_key = hashlib.sha256(f"test.ping:{webhook_id}:{nonce}".encode("utf-8")).hexdigest()
+
+    row_id = record_webhook_event(
+        webhook_id=int(webhook_id),
+        event_type=et,
+        dedupe_key=dedupe_key,
+        payload=payload,
+        status="queued",
+        max_attempts=5,
+    )
+    if row_id is None:
+        return {"ok": False, "reason": "deduped"}
+
+    body = json.dumps(payload).encode("utf-8")
+    try:
+        # send like your normal delivery function does
+        code = _post_json(str(wh.get("url") or ""), body, et, secret=str(wh.get("secret") or ""), timeout_s=10)
+        update_webhook_event(row_id, status="sent", http_status=code, error_text="")
+        return {"ok": True, "row_id": row_id, "http_status": code}
+    except Exception as e:
+        update_webhook_event(row_id, status="failed", http_status=0, error_text=str(e))
+        return {"ok": False, "row_id": row_id, "error": str(e)}
+
+def retry_pending_deliveries(limit: int = 50, max_attempts: int = 5) -> Dict[str, Any]:
+    hooks = {int(h["id"]): h for h in list_webhooks() if h.get("enabled")}
+    pending = list_pending_webhook_events(limit=limit, max_attempts=max_attempts)
+    retried = 0
+    sent = 0
+
+    for ev in pending:
+        wh = hooks.get(int(ev["webhook_id"]))
+        if not wh:
+            continue
+        et = str(ev["event_type"])
+        payload = ev.get("payload") or {}
+        body = json.dumps(payload).encode("utf-8")
+        try:
+            bump_webhook_attempt(int(ev["id"]))
+            code = _post_json(str(wh.get("url") or ""), body, et, secret=str(wh.get("secret") or ""), timeout_s=10)
+            update_webhook_event(int(ev["id"]), status="sent", http_status=code, error_text="")
+            sent += 1
+        except Exception as e:
+            update_webhook_event(int(ev["id"]), status="failed", http_status=0, error_text=str(e))
+        retried += 1
+
+    return {"pending": len(pending), "retried": retried, "sent": sent}

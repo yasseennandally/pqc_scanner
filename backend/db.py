@@ -194,21 +194,41 @@ def _ensure_sprint5_tables(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_results_scan ON scan_results(scan_id)")
 
 def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
-    """Ensure Sprint 8 integrations tables exist (webhooks + delivery log)."""
+    """Ensure Sprint 8 integrations tables exist (webhooks + delivery log).
+
+    Also performs lightweight, backward-compatible migrations for older DBs.
+    """
     conn.execute(
         '''
         CREATE TABLE IF NOT EXISTS webhooks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
             url TEXT NOT NULL,
-            secret TEXT NOT NULL,
-            events_json TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
+            secret TEXT NOT NULL DEFAULT '',
+            events_json TEXT NOT NULL DEFAULT '["*"]',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )
         '''
     )
+
+    # Backward-compatible migration for webhooks columns
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(webhooks)").fetchall()}
+        if "enabled" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
+        if "secret" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN secret TEXT NOT NULL DEFAULT ''")
+        if "events_json" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN events_json TEXT NOT NULL DEFAULT '["*"]'")
+        if "created_at" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+        if "updated_at" not in cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
+    except Exception:
+        pass
+
     conn.execute(
         '''
         CREATE TABLE IF NOT EXISTS webhook_events (
@@ -221,13 +241,55 @@ def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
             status TEXT NOT NULL,
             http_status INTEGER NOT NULL,
             error_text TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at TEXT NOT NULL DEFAULT '',
             FOREIGN KEY(webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE,
             UNIQUE(webhook_id, dedupe_key)
         )
         '''
     )
+
+    # Backward-compatible migration for webhook_events columns
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(webhook_events)").fetchall()}
+
+        if "dedupe_key" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN dedupe_key TEXT NOT NULL DEFAULT ''")
+        if "payload_json" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN payload_json TEXT NOT NULL DEFAULT '{}'")
+
+            # If older schema had 'payload' column, copy it across best-effort.
+            try:
+                cols2 = {r[1] for r in conn.execute("PRAGMA table_info(webhook_events)").fetchall()}
+                if "payload" in cols2:
+                    conn.execute(
+                        "UPDATE webhook_events SET payload_json = payload WHERE (payload_json IS NULL OR payload_json = '{}' OR payload_json = '')"
+                    )
+            except Exception:
+                pass
+
+        if "status" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN status TEXT NOT NULL DEFAULT 'queued'")
+        if "http_status" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN http_status INTEGER NOT NULL DEFAULT 0")
+        if "error_text" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN error_text TEXT NOT NULL DEFAULT ''")
+        if "attempts" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+        if "last_attempt_at" not in cols:
+            conn.execute("ALTER TABLE webhook_events ADD COLUMN last_attempt_at TEXT NOT NULL DEFAULT ''")
+
+        # Best-effort: ensure a unique index exists (won't crash if duplicates exist).
+        try:
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_webhook_events_dedupe ON webhook_events(webhook_id, dedupe_key)")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_webhook ON webhook_events(webhook_id)")
+
 
 def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
     """Ensure Sprint 8 integrations tables exist (webhooks + delivery log)."""
@@ -359,16 +421,17 @@ def save_scan_results(
     results: List[Dict[str, Any]],
     summary: Dict[str, Any],
     status: str = "completed",
+    error_text: str = "",
 ) -> None:
     with closing(get_connection()) as conn:
         _ensure_columns(conn)
         conn.execute(
             """
             UPDATE scans
-            SET status = ?, results_json = ?, summary_json = ?
+            SET status = ?, error_text = ?, results_json = ?, summary_json = ?
             WHERE id = ?
             """,
-            (status, json.dumps(results or []), json.dumps(summary or {}), scan_id),
+            (status, error_text or "", json.dumps(results or []), json.dumps(summary or {}), scan_id),
         )
         conn.commit()
 
@@ -1073,22 +1136,95 @@ def record_webhook_event(
     status: str = "queued",
     http_status: int = 0,
     error_text: str = "",
+    max_attempts: int = 5,
 ) -> Optional[int]:
-    """Insert an outgoing event attempt. Returns event row id, or None if deduped (already exists)."""
+    '''
+    Insert (or re-queue) an outgoing webhook delivery.
+
+    UNIQUE(webhook_id, dedupe_key) prevents duplicate spam.
+
+    If a row already exists:
+      - if status == 'sent' -> None
+      - if attempts >= max_attempts -> None
+      - else re-queue and return existing id
+    '''
     now = _utc_now_iso()
     payload_json = json.dumps(payload or {})
+
     with get_connection() as conn:
+        conn.row_factory = sqlite3.Row
+
+        # Backward compatible columns
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(webhook_events)").fetchall()}
+            if "attempts" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            if "last_attempt_at" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN last_attempt_at TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+
+        existing = conn.execute(
+            "SELECT id, status, attempts FROM webhook_events WHERE webhook_id=? AND dedupe_key=?",
+            (int(webhook_id), str(dedupe_key)),
+        ).fetchone()
+
+        if existing:
+            st = str(existing["status"] or "")
+            attempts = int(existing["attempts"] or 0)
+            if st == "sent":
+                return None
+            if attempts >= int(max_attempts):
+                return None
+
+            conn.execute(
+                "UPDATE webhook_events SET payload_json=?, status=?, http_status=?, error_text=? WHERE id=?",
+                (payload_json, str(status), int(http_status), str(error_text or ""), int(existing["id"])),
+            )
+            conn.commit()
+            return int(existing["id"])
+
         try:
             cur = conn.execute(
-                "INSERT INTO webhook_events(webhook_id,created_at,event_type,dedupe_key,payload_json,status,http_status,error_text) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                (int(webhook_id), now, str(event_type), str(dedupe_key), payload_json, str(status), int(http_status), str(error_text or "")),
+                "INSERT INTO webhook_events(webhook_id,created_at,event_type,dedupe_key,payload_json,status,http_status,error_text,attempts,last_attempt_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (
+                    int(webhook_id),
+                    now,
+                    str(event_type),
+                    str(dedupe_key),
+                    payload_json,
+                    str(status),
+                    int(http_status),
+                    str(error_text or ""),
+                    0,
+                    "",
+                ),
             )
             conn.commit()
             return int(cur.lastrowid)
         except sqlite3.IntegrityError:
-            # deduped by UNIQUE(webhook_id, dedupe_key)
             return None
+
+
+def bump_webhook_attempt(event_row_id: int) -> None:
+    '''Increment attempts and set last_attempt_at (call right before each HTTP send).'''
+    now = _utc_now_iso()
+    with get_connection() as conn:
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(webhook_events)").fetchall()}
+            if "attempts" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            if "last_attempt_at" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN last_attempt_at TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+
+        conn.execute(
+            "UPDATE webhook_events SET attempts = attempts + 1, last_attempt_at=? WHERE id=?",
+            (now, int(event_row_id)),
+        )
+        conn.commit()
 
 
 def update_webhook_event(event_row_id: int, status: str, http_status: int = 0, error_text: str = "") -> None:
@@ -1116,22 +1252,32 @@ def list_webhook_events(limit: int = 50):
     with closing(get_connection()) as conn:
         _ensure_integrations_tables(conn)
         conn.row_factory = sqlite3.Row
+
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(webhook_events)").fetchall()}
+            if "attempts" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            if "last_attempt_at" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN last_attempt_at TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+
         cur = conn.cursor()
         cur.execute(
-            """
+            '''
             SELECT id, webhook_id, created_at, event_type, dedupe_key,
-                   status, http_status, error_text, payload_json
+                   status, http_status, error_text, attempts, last_attempt_at, payload_json
             FROM webhook_events
             ORDER BY id DESC
             LIMIT ?
-            """,
+            ''',
             (limit,),
         )
         rows = cur.fetchall()
 
     out = []
     for r in rows:
-        d = dict(r)  # IMPORTANT: json-serializable
+        d = dict(r)
         pj = d.get("payload_json") or "{}"
         try:
             d["payload"] = _json.loads(pj)
@@ -1139,9 +1285,56 @@ def list_webhook_events(limit: int = 50):
             d["payload"] = pj
         d.pop("payload_json", None)
         out.append(d)
-
     return out
 
+
+def list_pending_webhook_events(limit: int = 100, max_attempts: int = 5) -> List[Dict[str, Any]]:
+    '''
+    Pending = queued OR failed, attempts < max_attempts.
+    Used by periodic retry.
+    '''
+    try:
+        limit = int(limit or 100)
+    except Exception:
+        limit = 100
+    limit = max(1, min(500, limit))
+
+    with closing(get_connection()) as conn:
+        _ensure_integrations_tables(conn)
+        conn.row_factory = sqlite3.Row
+
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(webhook_events)").fetchall()}
+            if "attempts" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            if "last_attempt_at" not in cols:
+                conn.execute("ALTER TABLE webhook_events ADD COLUMN last_attempt_at TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+
+        rows = conn.execute(
+            '''
+            SELECT id, webhook_id, created_at, event_type, dedupe_key,
+                   status, http_status, error_text, attempts, last_attempt_at, payload_json
+            FROM webhook_events
+            WHERE (status='queued' OR status='failed')
+              AND attempts < ?
+            ORDER BY id ASC
+            LIMIT ?
+            ''',
+            (int(max_attempts), int(limit)),
+        ).fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["payload"] = json.loads(d.get("payload_json") or "{}")
+        except Exception:
+            d["payload"] = d.get("payload_json") or "{}"
+        d.pop("payload_json", None)
+        out.append(d)
+    return out
 
 
 def update_scan_job(
