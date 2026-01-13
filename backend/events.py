@@ -16,6 +16,7 @@ from db import (
     update_webhook_event,
     get_baseline,
     list_pending_webhook_events,
+    get_integration_setting,
 )
 
 def _sha256_hex(s: str) -> str:
@@ -42,40 +43,102 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
     results = scan.get("results") or []
     summary = scan.get("summary") or {}
     status = scan.get("status") or ""
+    error_text = scan.get("error_text") or ""
+
+    # UI-configurable threshold (default 30) – stored in DB integrations_settings
+    try:
+        expiring_soon_days = int(get_integration_setting("cert_expiring_soon_days", "30"))
+    except Exception:
+        expiring_soon_days = 30
+    expiring_soon_days = max(1, min(36500, expiring_soon_days))
 
     events: List[Dict[str, Any]] = []
 
+    # Always emit scan.completed
     events.append({
         "event_type": "scan.completed",
         "dedupe_key": _sha256_hex(f"scan.completed:{scan_id}"),
         "payload": {"scan_id": scan_id, "status": status, "summary": summary},
     })
 
+    # High-value automation event for failures (in addition to scan.completed)
+    if str(status).lower() == "failed":
+        events.append({
+            "event_type": "scan.failed",
+            "dedupe_key": _sha256_hex(f"scan.failed:{scan_id}"),
+            "payload": {"scan_id": scan_id, "status": status, "summary": summary, "error_text": error_text},
+        })
+
     for r in results:
         host = str(r.get("host") or "")
         port = int(r.get("port") or 443)
         ak = f"{host}:{port}"
+
         rule_ids = set(_extract_rule_ids(r))
         facts = r.get("facts") or {}
 
-        if "CERT_EXPIRED" in rule_ids:
-            fp = str(facts.get("not_after") or "")
+        # Facts helpers
+        du = facts.get("days_until_expiry", None)
+        try:
+            du_int = int(du) if du is not None and str(du) != "" else None
+        except Exception:
+            du_int = None
+        not_after = str(facts.get("not_after") or "")
+        verify_reason = str(facts.get("verify_reason") or "")
+
+        # cert.expired: emit if facts say it's expired OR rule id exists
+        expired = False
+        if du_int is not None and du_int < 0:
+            expired = True
+        if verify_reason == "expired":
+            expired = True
+        if "CERT_EXPIRED" in rule_ids or "VERIFY_EXPIRED" in rule_ids:
+            expired = True
+
+        if expired:
+            fp = f"{not_after}:{du_int if du_int is not None else ''}:{verify_reason}"
             events.append({
                 "event_type": "cert.expired",
                 "dedupe_key": _sha256_hex(f"cert.expired:{ak}:{fp}"),
-                "payload": {"scan_id": scan_id, "asset_key": ak, "facts": facts, "finding_ids": sorted(rule_ids)},
+                "payload": {
+                    "scan_id": scan_id,
+                    "asset_key": ak,
+                    "days_until_expiry": du_int,
+                    "not_after": not_after,
+                    "verify_reason": verify_reason,
+                    "threshold_days": expiring_soon_days,
+                    "facts": facts,
+                    "finding_ids": sorted(rule_ids),
+                },
             })
 
+        # cert.expiring_soon: uses UI threshold (facts-based, not hardcoded in policy)
+        expiring_soon = False
+        if du_int is not None and 0 <= du_int <= expiring_soon_days:
+            expiring_soon = True
+        # also allow explicit rule id (legacy behavior)
         if "CERT_EXPIRING_SOON" in rule_ids:
-            fp = f"{facts.get('not_after','')}:{facts.get('days_until_expiry','')}"
+            expiring_soon = True
+
+        if expiring_soon:
+            fp = f"{not_after}:{du_int if du_int is not None else ''}:{expiring_soon_days}"
             events.append({
                 "event_type": "cert.expiring_soon",
                 "dedupe_key": _sha256_hex(f"cert.expiring_soon:{ak}:{fp}"),
-                "payload": {"scan_id": scan_id, "asset_key": ak, "facts": facts, "finding_ids": sorted(rule_ids)},
+                "payload": {
+                    "scan_id": scan_id,
+                    "asset_key": ak,
+                    "days_until_expiry": du_int,
+                    "not_after": not_after,
+                    "threshold_days": expiring_soon_days,
+                    "facts": facts,
+                    "finding_ids": sorted(rule_ids),
+                },
             })
 
+        # pqc.not_ready (existing, high value)
         if "PQC_RSA_ENDPOINT" in rule_ids or "PQC_EC_ENDPOINT" in rule_ids:
-            sigs = sorted([x for x in ("PQC_RSA_ENDPOINT","PQC_EC_ENDPOINT") if x in rule_ids])
+            sigs = sorted([x for x in ("PQC_RSA_ENDPOINT", "PQC_EC_ENDPOINT") if x in rule_ids])
             fp = ",".join(sigs)
             events.append({
                 "event_type": "pqc.not_ready",
@@ -83,6 +146,7 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
                 "payload": {"scan_id": scan_id, "asset_key": ak, "signals": sigs},
             })
 
+        # scan.regression (baseline comparison)
         base = get_baseline(ak)
         if base and base.get("baseline_scan_id"):
             base_scan = load_scan_row(str(base["baseline_scan_id"]))
@@ -102,6 +166,7 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
                 })
 
     return events
+
 
 def _post_json(url: str, body: bytes, event_type: str, secret: str = "", timeout_s: int = 10) -> int:
     headers = {"Content-Type": "application/json", "X-PQC-Event": event_type}

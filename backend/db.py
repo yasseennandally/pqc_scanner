@@ -998,6 +998,38 @@ def list_scan_results_since(since_iso: str, limit: int = 200000) -> list[dict]:
 # Sprint 8 Integrations: Webhooks + Delivery Log
 # -----------------------------
 
+def _ensure_integrations_settings_table(conn: sqlite3.Connection) -> None:
+    """Ensure settings table exists for integrations."""
+    conn.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS integrations_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        '''
+    )
+    conn.commit()
+
+
+def get_integration_setting(key: str, default: str = "") -> str:
+    """Fetch a persisted integrations setting."""
+    with closing(get_connection()) as conn:
+        _ensure_integrations_settings_table(conn)
+        row = conn.execute("SELECT value FROM integrations_settings WHERE key = ?", (key,)).fetchone()
+        return row[0] if row else default
+
+
+def set_integration_setting(key: str, value: str) -> None:
+    """Persist an integrations setting."""
+    with closing(get_connection()) as conn:
+        _ensure_integrations_settings_table(conn)
+        conn.execute(
+            "INSERT INTO integrations_settings(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value)),
+        )
+        conn.commit()
+
 def list_webhooks(limit: int = 200) -> list[dict]:
     limit = max(1, min(int(limit), 500))
     with get_connection() as conn:
