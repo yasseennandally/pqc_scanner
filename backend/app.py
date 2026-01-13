@@ -13,7 +13,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
-from events import deliver_events_for_scan, deliver_test_ping
 
 from scanner import scan_host, parse_target
 from policy import summarize_results
@@ -56,7 +55,12 @@ from db import (
     upsert_webhook,
     delete_webhook,
     list_webhook_events,
+    get_integration_setting,
+    set_integration_setting,
 )
+
+
+from events import deliver_test_ping, retry_pending_deliveries
 
 
 # -----------------------------
@@ -1314,6 +1318,32 @@ def api_delete_webhook(webhook_id: int):
 @app.get("/integrations/webhook-events")
 def api_list_webhook_events(limit: int = 50):
     return {"items": list_webhook_events(limit=limit)}
+
+@app.post("/integrations/webhook-events/retry")
+def api_retry_webhook_events(limit: int = 100):
+    # Force a retry cycle (useful for debugging and a "Retry now" UX button)
+    return retry_pending_deliveries(limit=int(limit or 100))
+
+
+@app.get("/integrations/settings")
+def api_get_integration_settings():
+    # Currently: cert expiry soon threshold in days
+    try:
+        days = int(get_integration_setting("cert_expiring_soon_days", "30"))
+    except Exception:
+        days = 30
+    return {"cert_expiring_soon_days": days}
+
+
+@app.put("/integrations/settings")
+def api_put_integration_settings(body: dict):
+    try:
+        days = int(body.get("cert_expiring_soon_days", 30))
+    except Exception:
+        days = 30
+    days = max(1, min(36500, days))
+    set_integration_setting("cert_expiring_soon_days", str(days))
+    return {"ok": True, "cert_expiring_soon_days": days}
 
 @app.get("/integrations/webhooks")
 def api_list_webhooks():

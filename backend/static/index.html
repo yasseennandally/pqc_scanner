@@ -2327,6 +2327,45 @@ function headers(){
 
         <div id="wh_msg" class="tiny mono" style="margin-top:8px;"></div>
 
+<div class="h2" style="margin-top:14px;">Integration Settings</div>
+<div class="grid2" style="margin-top:8px;">
+  <div>
+    <div class="label">Cert expiring soon threshold (days)</div>
+    <input id="set_cert_days" class="input" type="number" min="1" max="36500" value="30" />
+    <div class="tiny mono" style="opacity:.8;margin-top:4px;">Used for emitting cert.expiring_soon events (0 ≤ days_until_expiry ≤ threshold).</div>
+  </div>
+  <div style="display:flex; gap:8px; justify-content:flex-end; align-items:flex-end;">
+    <button class="btn" id="set_saveBtn">Save</button>
+  </div>
+</div>
+<div id="set_msg" class="tiny mono" style="margin-top:8px;"></div>
+
+<div class="h2" style="margin-top:14px;">Delivery tools</div>
+<div class="grid2" style="margin-top:8px; align-items:end;">
+  <div>
+    <div class="label">Status</div>
+    <select id="evt_filter_status" class="input">
+      <option value="">(all)</option>
+      <option value="sent">sent</option>
+      <option value="failed">failed</option>
+      <option value="queued">queued</option>
+    </select>
+  </div>
+  <div>
+    <div class="label">Event contains</div>
+    <input id="evt_filter_event" class="input" placeholder="e.g. scan.completed" />
+  </div>
+  <div>
+    <div class="label">Webhook id</div>
+    <input id="evt_filter_webhook" class="input" placeholder="e.g. 25" />
+  </div>
+  <div style="display:flex; gap:8px; justify-content:flex-end;">
+    <button class="btn ghost" id="evt_clearBtn">Clear</button>
+    <button class="btn" id="evt_retryBtn">Retry failed now</button>
+  </div>
+</div>
+<div id="evt_tools_msg" class="tiny mono" style="margin-top:8px;"></div>
+
         <div class="h2" style="margin-top:14px;">Registered Webhooks</div>
         <div id="wh_table_wrap" style="margin-top:8px;"></div>
       </div>
@@ -2420,17 +2459,20 @@ function headers(){
     `;
   }
 
-  function renderEvents(items){
-    cache.events = Array.isArray(items) ? items : [];
+  function renderEvents(items, meta){
+    if (meta && meta.isSource){
+      cache.events = Array.isArray(items) ? items : [];
+    }
+    const viewItems = Array.isArray(items) ? items : [];
     const wrap = el("wh_events_wrap");
     if (!wrap) return;
 
-    if (!cache.events.length){
+    if (!viewItems.length){
       wrap.innerHTML = '<div class="tiny mono" style="opacity:.8">No deliveries yet. Run a scan to generate events.</div>';
       return;
     }
 
-    const rows = cache.events.map(ev=>{
+    const rows = viewItems.map(ev=>{
       const ts = ev.created_at || ev.delivered_at || "";
       const http = (ev.http_status !== undefined && ev.http_status !== null) ? String(ev.http_status) : "";
       const status = ev.status || "";
@@ -2475,13 +2517,73 @@ function headers(){
     setMsg("wh_events_msg", "Loading deliveries...");
     const data = await fetchJson("/integrations/webhook-events?limit=50");
     const items = _asList(data);
-    renderEvents(items);
+    renderEvents(items, {isSource:true});
+    applyEventFilters();
     setMsg("wh_events_msg", `Loaded ${items.length} deliveries.`);
   }
 
-  async function refreshAll(){
+  async function loadIntegrationSettings(){
+  try{
+    setMsg("set_msg","Loading...");
+    const s = await fetchJson("/integrations/settings");
+    const days = (s && typeof s.cert_expiring_soon_days === "number") ? s.cert_expiring_soon_days : 30;
+    if (el("set_cert_days")) el("set_cert_days").value = String(days);
+    setMsg("set_msg","");
+  }catch(e){
+    setMsg("set_msg", "Load failed: " + (e?.message || String(e)));
+  }
+}
+
+async function saveIntegrationSettings(){
+  try{
+    const raw = el("set_cert_days") ? el("set_cert_days").value : "30";
+    let days = parseInt(raw || "30", 10);
+    if (!Number.isFinite(days) || days < 1) days = 30;
+    setMsg("set_msg","Saving...");
+    const r = await fetchJson("/integrations/settings", {
+      method: "PUT",
+      body: JSON.stringify({ cert_expiring_soon_days: days })
+    });
+    const saved = (r && typeof r.cert_expiring_soon_days === "number") ? r.cert_expiring_soon_days : days;
+    if (el("set_cert_days")) el("set_cert_days").value = String(saved);
+    setMsg("set_msg","Saved.");
+  }catch(e){
+    setMsg("set_msg", "Save failed: " + (e?.message || String(e)));
+  }
+}
+
+function applyEventFilters(){
+  const status = (el("evt_filter_status")?.value || "").trim().toLowerCase();
+  const evq = (el("evt_filter_event")?.value || "").trim().toLowerCase();
+  const whq = (el("evt_filter_webhook")?.value || "").trim();
+  let view = Array.isArray(cache.events) ? cache.events.slice() : [];
+  if (status){
+    view = view.filter(x => String(x.status || "").toLowerCase() === status);
+  }
+  if (evq){
+    view = view.filter(x => String(x.event_type || "").toLowerCase().includes(evq));
+  }
+  if (whq){
+    view = view.filter(x => String(x.webhook_id ?? "").includes(whq));
+  }
+  renderEvents(view, {isSource:false});
+}
+
+async function retryFailedDeliveries(){
+  try{
+    setMsg("evt_tools_msg","Retrying...");
+    const r = await fetchJson("/integrations/webhook-events/retry", { method:"POST" });
+    setMsg("evt_tools_msg", r && r.ok ? `Retry started: ${r.updated ?? 0} queued` : (r?.error || "Retry started."));
+    await loadWebhookEvents();
+  }catch(e){
+    setMsg("evt_tools_msg", "Retry failed: " + (e?.message || String(e)));
+  }
+}
+
+async function refreshAll(){
     await loadWebhooks();
     await loadWebhookEvents();
+    await loadIntegrationSettings();
   }
 
   function fillForm(w){
@@ -2512,12 +2614,13 @@ function headers(){
   }
 
   async function deleteWebhook(id){
-    if (!confirm("Delete this webhook?")) return;
-    setMsg("wh_msg", "Deleting...");
-    await fetchJson(`/integrations/webhooks/${id}`, { method: "DELETE" });
-    setMsg("wh_msg", "Deleted.");
-    await refreshAll();
-  }
+  if (!confirm("Delete this webhook?")) return;
+  setMsg("wh_msg", "Deleting...");
+  await fetchJson(`/integrations/webhooks/${id}`, { method: "DELETE" });
+  setMsg("wh_msg", "Deleted.");
+  await refreshAll();
+}
+
 
   function open(){
     show(true);
@@ -2557,6 +2660,30 @@ function headers(){
     setMsg("wh_msg", `Save failed: ${e?.message || e}`);
     console.warn(e);
   }));
+
+// Settings + delivery tools wiring
+const setSave = el("set_saveBtn");
+if (setSave) setSave.addEventListener("click", (e)=>{ e.preventDefault(); saveIntegrationSettings(); });
+
+const retryBtn = el("evt_retryBtn");
+if (retryBtn) retryBtn.addEventListener("click", (e)=>{ e.preventDefault(); retryFailedDeliveries(); });
+
+const clearBtn = el("evt_clearBtn");
+if (clearBtn) clearBtn.addEventListener("click", (e)=>{
+  e.preventDefault();
+  if (el("evt_filter_status")) el("evt_filter_status").value = "";
+  if (el("evt_filter_event")) el("evt_filter_event").value = "";
+  if (el("evt_filter_webhook")) el("evt_filter_webhook").value = "";
+  applyEventFilters();
+  setMsg("evt_tools_msg","");
+});
+
+["evt_filter_status","evt_filter_event","evt_filter_webhook"].forEach(id=>{
+  const n = el(id);
+  if (!n) return;
+  n.addEventListener("input", ()=>applyEventFilters());
+  n.addEventListener("change", ()=>applyEventFilters());
+});
 
   const back = el("integrationsBackdrop");
   const box = el("integrationsBox");
