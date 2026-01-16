@@ -2340,6 +2340,92 @@ function headers(){
 </div>
 <div id="set_msg" class="tiny mono" style="margin-top:8px;"></div>
 
+
+
+<div class="h2" style="margin-top:14px;">Event Rules (Routing & Triggers)</div>
+<div class="tiny mono" style="opacity:.8;margin-top:4px;">Rules route events to specific webhooks. If no rules are enabled, the system falls back to webhook event allow-lists.</div>
+
+<div class="grid2" style="margin-top:8px;">
+  <div>
+    <div class="label">Rule name</div>
+    <input id="rule_name" class="input" placeholder="Prod cert expiry to PagerDuty" />
+  </div>
+  <div style="display:flex; gap:10px; align-items:end; justify-content:space-between;">
+    <label class="tiny" style="display:flex; gap:8px; align-items:center;">
+      <input type="checkbox" id="rule_enabled" checked /> Enabled
+    </label>
+    <div style="display:flex; gap:8px;">
+      <button class="btn ghost" id="rule_clearBtn">Clear</button>
+      <button class="btn" id="rule_saveBtn">Save Rule</button>
+    </div>
+  </div>
+
+  <div>
+    <div class="label">Event types</div>
+    <input id="rule_event_types" class="input" placeholder="*  (or: cert.expired, cert.expiring_soon)" />
+    <div class="tiny mono" style="opacity:.8;margin-top:4px;">Comma-separated. Use * for all.</div>
+  </div>
+  <div>
+    <div class="label">Min severity</div>
+    <select id="rule_min_sev" class="input">
+      <option value="">(any)</option>
+      <option value="info">info</option>
+      <option value="low">low</option>
+      <option value="medium">medium</option>
+      <option value="high">high</option>
+      <option value="critical">critical</option>
+    </select>
+  </div>
+
+  <div>
+    <div class="label">Finding rule_ids (optional)</div>
+    <input id="rule_rule_ids" class="input" placeholder="CERT_EXPIRED, WEAK_CIPHER_ACCEPTED" />
+    <div class="tiny mono" style="opacity:.8;margin-top:4px;">Matches against finding_ids / new_finding_ids / signals in event payload.</div>
+  </div>
+  <div class="grid2" style="gap:10px;">
+    <div>
+      <div class="label">Quantum score min</div>
+      <input id="rule_qmin" class="input" type="number" step="0.1" placeholder="-1" />
+    </div>
+    <div>
+      <div class="label">Cooldown (minutes)</div>
+      <input id="rule_cooldown" class="input" type="number" step="1" min="0" placeholder="0" />
+    </div>
+  </div>
+
+  <div>
+    <div class="label">Asset filters: environments</div>
+    <input id="rule_envs" class="input" placeholder="prod, staging" />
+  </div>
+  <div>
+    <div class="label">Asset filters: teams</div>
+    <input id="rule_teams" class="input" placeholder="payments, core" />
+  </div>
+
+  <div>
+    <div class="label">Asset filters: criticalities</div>
+    <input id="rule_crits" class="input" placeholder="tier0, tier1" />
+  </div>
+  <div>
+    <div class="label">Asset filters: tags</div>
+    <input id="rule_tags" class="input" placeholder="internet-facing" />
+  </div>
+</div>
+
+<div style="margin-top:10px;">
+  <div class="label">Route to webhooks</div>
+  <div id="rule_webhooks_wrap" style="border:1px solid rgba(255,255,255,.08); border-radius:10px; padding:10px; max-height:140px; overflow:auto;"></div>
+</div>
+
+<div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+  <button class="btn ghost" id="rule_testBtn">Test rules on last scan</button>
+</div>
+<div id="rule_msg" class="tiny mono" style="margin-top:8px;"></div>
+<div id="rule_test_out" class="tiny mono" style="margin-top:8px; white-space:pre-wrap;"></div>
+
+<div class="h2" style="margin-top:14px;">Existing Rules</div>
+<div id="rules_table_wrap" style="margin-top:8px;"></div>
+
 <div class="h2" style="margin-top:14px;">Delivery tools</div>
 <div class="grid2" style="margin-top:8px; align-items:end;">
   <div>
@@ -2407,6 +2493,12 @@ function headers(){
     if (!n) return;
     n.textContent = msg || "";
   }
+  function parseCsvList(s){
+    const raw = String(s || "").trim();
+    if (!raw) return [];
+    return raw.split(",").map(x=>x.trim()).filter(Boolean);
+  }
+
   function parseEvents(s){
     const raw = String(s || "").trim();
     if (!raw || raw === "*") return ["*"];
@@ -2414,7 +2506,7 @@ function headers(){
   }
 
   // cache for edit buttons
-  const cache = { webhooks: [], events: [] };
+  const cache = { webhooks: [], events: [], rules: [] };
 
   function renderWebhooks(items){
     cache.webhooks = Array.isArray(items) ? items : [];
@@ -2505,6 +2597,208 @@ function headers(){
     `;
   }
 
+
+  function renderRuleWebhookChecklist(selectedIds){
+    const wrap = el("rule_webhooks_wrap");
+    if (!wrap) return;
+    const sel = new Set((selectedIds||[]).map(x=>Number(x)));
+    if (!cache.webhooks.length){
+      wrap.innerHTML = '<div class="tiny mono" style="opacity:.8">No webhooks yet. Create one first.</div>';
+      return;
+    }
+    const rows = cache.webhooks.map(w=>{
+      const id = Number(w.id);
+      const checked = sel.has(id) ? 'checked' : '';
+      return `<label class="tiny" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+        <input type="checkbox" class="rule_wh_cb" data-id="${id}" ${checked}/>
+        <span class="mono">#${id}</span>
+        <span>${esc(w.name||'')}</span>
+        <span class="mono" style="opacity:.7; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:260px;" title="${esc(w.url||'')}">${esc(w.url||'')}</span>
+      </label>`;
+    }).join('');
+    wrap.innerHTML = rows;
+  }
+
+  function renderRules(items){
+    cache.rules = Array.isArray(items) ? items : [];
+    const wrap = el("rules_table_wrap");
+    if (!wrap) return;
+    if (!cache.rules.length){
+      wrap.innerHTML = '<div class="tiny mono" style="opacity:.8">No rules yet. Create one above.</div>';
+      return;
+    }
+
+    const rows = cache.rules.map(r=>{
+      const enabled = !!r.enabled;
+      const evs = Array.isArray(r.event_types) ? r.event_types.join(', ') : '';
+      const whs = Array.isArray(r.webhook_ids) ? r.webhook_ids.join(', ') : '';
+      const mins = r.min_severity || '';
+      const rids = Array.isArray(r.rule_ids) ? r.rule_ids.join(', ') : '';
+      return `
+        <tr>
+          <td class="mono">${esc(r.name||'')}</td>
+          <td class="mono">${enabled ? 'yes' : 'no'}</td>
+          <td class="mono" title="${esc(evs)}" style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(evs)}</td>
+          <td class="mono">${esc(mins)}</td>
+          <td class="mono" title="${esc(rids)}" style="max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(rids)}</td>
+          <td class="mono">${esc(whs)}</td>
+          <td style="white-space:nowrap; text-align:right;">
+            <button class="btn ghost" onclick="window.__ruleEdit(${Number(r.id)})">Edit</button>
+            <button class="btn danger" onclick="window.__ruleDelete(${Number(r.id)})">Delete</button>
+          </td>
+        </tr>
+      `;
+    }).join('');
+
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Enabled</th>
+            <th>Event types</th>
+            <th>Min sev</th>
+            <th>Rule IDs</th>
+            <th>Webhook IDs</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
+  async function loadRules(){
+    setMsg("rule_msg", "Loading rules...");
+    const data = await fetchJson("/integrations/rules?limit=200");
+    const items = _asList(data);
+    renderRules(items);
+    setMsg("rule_msg", `Loaded ${items.length} rules.`);
+  }
+
+  function getSelectedRuleWebhookIds(){
+    const wrap = el("rule_webhooks_wrap");
+    if (!wrap) return [];
+    const cbs = wrap.querySelectorAll('input.rule_wh_cb');
+    const out = [];
+    cbs.forEach(cb=>{
+      if (cb.checked){
+        const id = Number(cb.getAttribute('data-id'));
+        if (Number.isFinite(id)) out.push(id);
+      }
+    });
+    return out;
+  }
+
+  function fillRuleForm(r){
+    el('rule_name').value = r?.name ?? '';
+    el('rule_enabled').checked = !!r?.enabled;
+    el('rule_event_types').value = Array.isArray(r?.event_types) ? r.event_types.join(', ') : (r?.event_types ?? '*');
+    el('rule_min_sev').value = (r?.min_severity ?? '').toLowerCase();
+    el('rule_rule_ids').value = Array.isArray(r?.rule_ids) ? r.rule_ids.join(', ') : '';
+    el('rule_qmin').value = (r?.quantum_score_min !== undefined && r?.quantum_score_min !== null) ? String(r.quantum_score_min) : '';
+    el('rule_cooldown').value = (r?.cooldown_minutes !== undefined && r?.cooldown_minutes !== null) ? String(r.cooldown_minutes) : '';
+    el('rule_envs').value = Array.isArray(r?.environments) ? r.environments.join(', ') : '';
+    el('rule_teams').value = Array.isArray(r?.teams) ? r.teams.join(', ') : '';
+    el('rule_crits').value = Array.isArray(r?.criticalities) ? r.criticalities.join(', ') : '';
+    el('rule_tags').value = Array.isArray(r?.tags) ? r.tags.join(', ') : '';
+    renderRuleWebhookChecklist(Array.isArray(r?.webhook_ids) ? r.webhook_ids : []);
+    // store current editing id
+    window.__ruleEditingId = Number(r?.id || 0) || 0;
+  }
+
+  function clearRuleForm(){
+    window.__ruleEditingId = 0;
+    el('rule_name').value = '';
+    el('rule_enabled').checked = true;
+    el('rule_event_types').value = '*';
+    el('rule_min_sev').value = '';
+    el('rule_rule_ids').value = '';
+    el('rule_qmin').value = '';
+    el('rule_cooldown').value = '';
+    el('rule_envs').value = '';
+    el('rule_teams').value = '';
+    el('rule_crits').value = '';
+    el('rule_tags').value = '';
+    renderRuleWebhookChecklist([]);
+    setMsg('rule_msg','');
+    if (el('rule_test_out')) el('rule_test_out').textContent = '';
+  }
+
+  async function saveRule(){
+    const name = (el('rule_name').value||'').trim();
+    if (!name) throw new Error('Rule name is required.');
+
+    const enabled = !!el('rule_enabled').checked;
+    const event_types = parseEvents(el('rule_event_types').value||'*');
+    const webhook_ids = getSelectedRuleWebhookIds();
+    const min_severity = (el('rule_min_sev').value||'').trim();
+    const rule_ids = parseCsvList(el('rule_rule_ids').value||'');
+
+    let quantum_score_min = -1;
+    const qraw = (el('rule_qmin').value||'').trim();
+    if (qraw !== ''){
+      const q = Number(qraw);
+      if (Number.isFinite(q)) quantum_score_min = q;
+    }
+
+    let cooldown_minutes = 0;
+    const craw = (el('rule_cooldown').value||'').trim();
+    if (craw !== ''){
+      const c = parseInt(craw, 10);
+      if (Number.isFinite(c) && c >= 0) cooldown_minutes = c;
+    }
+
+    const environments = parseCsvList(el('rule_envs').value||'');
+    const teams = parseCsvList(el('rule_teams').value||'');
+    const criticalities = parseCsvList(el('rule_crits').value||'');
+    const tags = parseCsvList(el('rule_tags').value||'');
+
+    const id = Number(window.__ruleEditingId || 0) || undefined;
+
+    setMsg('rule_msg','Saving rule...');
+    await fetchJson('/integrations/rules', {
+      method: 'POST',
+      body: JSON.stringify({ id, name, enabled, webhook_ids, event_types, min_severity, rule_ids, quantum_score_min, environments, teams, criticalities, tags, cooldown_minutes })
+    });
+    setMsg('rule_msg','Saved.');
+    await loadRules();
+    clearRuleForm();
+  }
+
+  async function deleteRule(id){
+    if (!confirm('Delete this rule?')) return;
+    setMsg('rule_msg','Deleting...');
+    await fetchJson(`/integrations/rules/${id}`, { method: 'DELETE' });
+    setMsg('rule_msg','Deleted.');
+    await loadRules();
+    clearRuleForm();
+  }
+
+  async function testRulesOnLastScan(){
+    try{
+      setMsg('rule_msg','Testing rules on last scan...');
+      const r = await fetchJson('/integrations/rules/test', { method: 'POST', body: JSON.stringify({}) });
+      if (!r || !r.ok){
+        throw new Error(r?.error || 'Test failed');
+      }
+      const out = r.rules || [];
+      const lines = [];
+      lines.push(`scan_id=${r.scan_id} events=${r.events}`);
+      for (const rr of out){
+        lines.push(`- Rule #${rr.id} ${rr.name}: matches=${rr.count}`);
+        for (const m of (rr.matches||[]).slice(0, 10)){
+          lines.push(`    • ${m.event_type} ${m.asset_key||''}`);
+        }
+        if ((rr.matches||[]).length > 10) lines.push('    ...');
+      }
+      if (el('rule_test_out')) el('rule_test_out').textContent = lines.join('\n');
+      setMsg('rule_msg','Test complete.');
+    }catch(e){
+      setMsg('rule_msg','Test failed: ' + (e?.message||String(e)));
+    }
+  }
+
   async function loadWebhooks(){
     setMsg("wh_msg", "Loading webhooks...");
     const data = await fetchJson("/integrations/webhooks");
@@ -2584,6 +2878,7 @@ async function refreshAll(){
     await loadWebhooks();
     await loadWebhookEvents();
     await loadIntegrationSettings();
+    await loadRules();
   }
 
   function fillForm(w){
@@ -2627,6 +2922,8 @@ async function refreshAll(){
     // Default form values (safe defaults for Docker on Windows/Mac)
     if (!el("wh_url").value) el("wh_url").value = "http://host.docker.internal:9999/";
     if (!el("wh_events").value) el("wh_events").value = "*";
+    renderRuleWebhookChecklist([]);
+    clearRuleForm();
     refreshAll().catch(e=>{
       setMsg("wh_msg", `Load failed: ${e?.message || e}`);
       console.warn(e);
@@ -2660,6 +2957,24 @@ async function refreshAll(){
     setMsg("wh_msg", `Save failed: ${e?.message || e}`);
     console.warn(e);
   }));
+
+
+  // Rules wiring
+  const ruleSave = el('rule_saveBtn');
+  if (ruleSave) ruleSave.addEventListener('click', (e)=>{ e.preventDefault(); saveRule().catch(err=>{ setMsg('rule_msg', 'Save failed: ' + (err?.message||String(err))); console.warn(err); }); });
+  const ruleClear = el('rule_clearBtn');
+  if (ruleClear) ruleClear.addEventListener('click', (e)=>{ e.preventDefault(); clearRuleForm(); });
+  const ruleTest = el('rule_testBtn');
+  if (ruleTest) ruleTest.addEventListener('click', (e)=>{ e.preventDefault(); testRulesOnLastScan(); });
+
+  // expose for inline actions
+  window.__ruleEdit = function(id){
+    const r = cache.rules.find(x => Number(x.id) === Number(id));
+    if (r) fillRuleForm(r);
+  };
+  window.__ruleDelete = function(id){
+    deleteRule(id).catch(e=>{ setMsg('rule_msg', 'Delete failed: ' + (e?.message||String(e))); console.warn(e); });
+  };
 
 // Settings + delivery tools wiring
 const setSave = el("set_saveBtn");
