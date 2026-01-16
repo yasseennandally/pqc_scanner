@@ -75,7 +75,17 @@ def build_events_for_scan(scan_id: str) -> List[Dict[str, Any]]:
         ak = f"{host}:{port}"
 
         rule_ids = set(_extract_rule_ids(r))
-        facts = r.get("facts") or {}
+        # The scanner returns a *flat* facts dict for each result (host/port/findings/etc.).
+        # Some future/alternate callers might wrap it as {"facts": {...}}.
+        # Support both shapes; default to the flat dict so cert events have the correct fields.
+        facts = None
+        if isinstance(r, dict):
+            facts = r.get("facts")
+            if not isinstance(facts, dict) or not facts:
+                facts = r
+        if not isinstance(facts, dict):
+            facts = {}
+
 
         # Facts helpers
         du = facts.get("days_until_expiry", None)
