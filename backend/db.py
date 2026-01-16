@@ -217,42 +217,6 @@ def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
         )
         '''
     )
-    conn.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS webhook_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            webhook_id INTEGER NOT NULL,
-            created_at TEXT NOT NULL,
-            event_type TEXT NOT NULL,
-            dedupe_key TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            status TEXT NOT NULL,
-            http_status INTEGER NOT NULL,
-            error_text TEXT NOT NULL,
-            FOREIGN KEY(webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE,
-            UNIQUE(webhook_id, dedupe_key)
-        )
-        '''
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_webhook ON webhook_events(webhook_id)")
-
-def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
-    """Ensure Sprint 8 integrations tables exist (webhooks + delivery log)."""
-    conn.execute(
-        '''
-        CREATE TABLE IF NOT EXISTS webhooks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            url TEXT NOT NULL,
-            secret TEXT NOT NULL,
-            events_json TEXT NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-        '''
-    )
 
     conn.execute(
         '''
@@ -299,7 +263,6 @@ def _ensure_integrations_tables(conn: sqlite3.Connection) -> None:
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_created ON webhook_events(created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_webhook_events_webhook ON webhook_events(webhook_id)")
-
 
 
 
@@ -1486,4 +1449,242 @@ def update_scan_job(
             return
         vals.append(scan_id)
         conn.execute(f"UPDATE scans SET {', '.join(sets)} WHERE id = ?", vals)
+        conn.commit()
+
+# -----------------------------
+# Sprint 8.2: Event Rules Engine (configurable routing)
+# -----------------------------
+
+
+def _ensure_event_rules_tables(conn: sqlite3.Connection) -> None:
+    """Ensure Sprint 8.2 tables exist.
+
+    event_rules: configurable matching + routing rules.
+    event_rule_fires: optional state tracking for cooldown / "only when it changes" (used in later steps).
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS event_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            webhook_ids_json TEXT NOT NULL DEFAULT '[]',
+            event_types_json TEXT NOT NULL DEFAULT '["*"]',
+            min_severity TEXT NOT NULL DEFAULT '',
+            rule_ids_json TEXT NOT NULL DEFAULT '[]',
+            quantum_score_min REAL NOT NULL DEFAULT -1,
+            environments_json TEXT NOT NULL DEFAULT '[]',
+            teams_json TEXT NOT NULL DEFAULT '[]',
+            criticalities_json TEXT NOT NULL DEFAULT '[]',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            cooldown_minutes INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS event_rule_fires (
+            rule_id INTEGER NOT NULL,
+            fingerprint TEXT NOT NULL,
+            last_fired_at TEXT NOT NULL,
+            PRIMARY KEY(rule_id, fingerprint),
+            FOREIGN KEY(rule_id) REFERENCES event_rules(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_event_rules_enabled ON event_rules(enabled)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_event_rule_fires_rule ON event_rule_fires(rule_id)")
+
+    # Backward-compatible migrations if an older partial schema exists.
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(event_rules)").fetchall()}
+        if "cooldown_minutes" not in cols:
+            conn.execute("ALTER TABLE event_rules ADD COLUMN cooldown_minutes INTEGER NOT NULL DEFAULT 0")
+        if "quantum_score_min" not in cols:
+            conn.execute("ALTER TABLE event_rules ADD COLUMN quantum_score_min REAL NOT NULL DEFAULT -1")
+    except Exception:
+        pass
+
+    conn.commit()
+
+
+def _json_list(v: Any) -> List[str]:
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return [str(x) for x in v if str(x).strip()]
+    s = str(v).strip()
+    if not s:
+        return []
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, list):
+            return [str(x) for x in obj if str(x).strip()]
+    except Exception:
+        pass
+    # comma-separated fallback
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+def list_event_rules(limit: int = 200) -> List[Dict[str, Any]]:
+    try:
+        limit = int(limit or 200)
+    except Exception:
+        limit = 200
+    limit = max(1, min(1000, limit))
+
+    with closing(get_connection()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, name, enabled, webhook_ids_json, event_types_json,
+                   min_severity, rule_ids_json, quantum_score_min,
+                   environments_json, teams_json, criticalities_json, tags_json,
+                   cooldown_minutes, created_at, updated_at
+            FROM event_rules
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        # decode json lists
+        for k in ("webhook_ids_json", "event_types_json", "rule_ids_json", "environments_json", "teams_json", "criticalities_json", "tags_json"):
+            try:
+                d[k[:-5]] = json.loads(d.get(k) or "[]")
+            except Exception:
+                d[k[:-5]] = []
+            d.pop(k, None)
+        d["enabled"] = bool(int(d.get("enabled") or 0))
+        out.append(d)
+    return out
+
+
+def upsert_event_rule(
+    *,
+    name: str,
+    webhook_ids: List[int],
+    event_types: List[str],
+    enabled: bool = True,
+    min_severity: str = "",
+    rule_ids: Optional[List[str]] = None,
+    quantum_score_min: float = -1,
+    environments: Optional[List[str]] = None,
+    teams: Optional[List[str]] = None,
+    criticalities: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
+    cooldown_minutes: int = 0,
+    rule_id: Optional[int] = None,
+    **_extra: Any,
+) -> Dict[str, Any]:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("rule name is required")
+
+    webhook_ids = [int(x) for x in (webhook_ids or [])]
+    if not webhook_ids:
+        raise ValueError("select at least one destination webhook")
+
+    event_types = _json_list(event_types) or ["*"]
+
+    min_severity = (min_severity or "").strip().lower()
+    if min_severity and min_severity not in ("low", "medium", "high", "critical"):
+        raise ValueError("min_severity must be one of: low, medium, high, critical")
+
+    rule_ids = _json_list(rule_ids)
+    environments = _json_list(environments)
+    teams = _json_list(teams)
+    criticalities = _json_list(criticalities)
+    tags = _json_list(tags)
+
+    try:
+        quantum_score_min = float(quantum_score_min)
+    except Exception:
+        quantum_score_min = -1
+
+    try:
+        cooldown_minutes = int(cooldown_minutes or 0)
+    except Exception:
+        cooldown_minutes = 0
+    cooldown_minutes = max(0, min(60 * 24 * 30, cooldown_minutes))
+
+    now = _utc_now_iso()
+
+    with closing(get_connection()) as conn:
+
+        if rule_id is not None:
+            conn.execute(
+                """
+                UPDATE event_rules
+                SET name=?, enabled=?, webhook_ids_json=?, event_types_json=?,
+                    min_severity=?, rule_ids_json=?, quantum_score_min=?,
+                    environments_json=?, teams_json=?, criticalities_json=?, tags_json=?,
+                    cooldown_minutes=?, updated_at=?
+                WHERE id=?
+                """,
+                (
+                    name,
+                    1 if enabled else 0,
+                    json.dumps(webhook_ids),
+                    json.dumps(event_types),
+                    min_severity,
+                    json.dumps(rule_ids),
+                    float(quantum_score_min),
+                    json.dumps(environments),
+                    json.dumps(teams),
+                    json.dumps(criticalities),
+                    json.dumps(tags),
+                    int(cooldown_minutes),
+                    now,
+                    int(rule_id),
+                ),
+            )
+            rid = int(rule_id)
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO event_rules (
+                    name, enabled, webhook_ids_json, event_types_json,
+                    min_severity, rule_ids_json, quantum_score_min,
+                    environments_json, teams_json, criticalities_json, tags_json,
+                    cooldown_minutes, created_at, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    name,
+                    1 if enabled else 0,
+                    json.dumps(webhook_ids),
+                    json.dumps(event_types),
+                    min_severity,
+                    json.dumps(rule_ids),
+                    float(quantum_score_min),
+                    json.dumps(environments),
+                    json.dumps(teams),
+                    json.dumps(criticalities),
+                    json.dumps(tags),
+                    int(cooldown_minutes),
+                    now,
+                    now,
+                ),
+            )
+            rid = int(cur.lastrowid)
+
+        conn.commit()
+
+    # Return fresh row
+    rules = [r for r in list_event_rules(limit=500) if int(r.get("id") or 0) == rid]
+    return rules[0] if rules else {"id": rid, "name": name}
+
+
+def delete_event_rule(rule_id: int) -> None:
+    with closing(get_connection()) as conn:
+        conn.execute("DELETE FROM event_rules WHERE id=?", (int(rule_id),))
+        conn.execute("DELETE FROM event_rule_fires WHERE rule_id=?", (int(rule_id),))
         conn.commit()

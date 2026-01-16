@@ -57,10 +57,14 @@ from db import (
     list_webhook_events,
     get_integration_setting,
     set_integration_setting,
+    # Sprint 8 rules
+    list_event_rules,
+    upsert_event_rule,
+    delete_event_rule,
 )
 
 
-from events import deliver_test_ping, retry_pending_deliveries
+from events import deliver_test_ping, retry_pending_deliveries, test_rules_for_scan
 
 
 # -----------------------------
@@ -1350,4 +1354,83 @@ def api_list_webhooks():
     return list_webhooks()
 
 
+
+
+# -----------------------------
+# Sprint 8: Integrations (Rules Engine)
+# -----------------------------
+
+class EventRuleIn(BaseModel):
+    id: Optional[int] = None
+    name: str = Field(..., min_length=1)
+    enabled: bool = True
+
+    # Routing
+    webhook_ids: List[int] = Field(default_factory=list)
+
+    # Matching
+    event_types: List[str] = Field(default_factory=lambda: ["*"])
+    min_severity: str = ""  # info/low/medium/high/critical
+    rule_ids: List[str] = Field(default_factory=list)  # e.g., CERT_EXPIRED
+    quantum_score_min: float = -1.0
+
+    # Asset metadata filters
+    environments: List[str] = Field(default_factory=list)
+    teams: List[str] = Field(default_factory=list)
+    criticalities: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+
+    cooldown_minutes: int = 0
+
+
+@app.get("/integrations/rules")
+def api_list_rules(limit: int = 200):
+    return {"items": list_event_rules(limit=limit)}
+
+
+@app.post("/integrations/rules")
+def api_upsert_rule(body: EventRuleIn):
+    # Basic normalization: allow "*" or comma-separated if UI sends a single string by mistake
+    try:
+        rule = upsert_event_rule(
+            name=body.name,
+            webhook_ids=[int(x) for x in (body.webhook_ids or [])],
+            event_types=[str(x).strip() for x in (body.event_types or ["*"]) if str(x).strip()],
+            enabled=bool(body.enabled),
+            min_severity=str(body.min_severity or "").strip(),
+            rule_ids=[str(x).strip() for x in (body.rule_ids or []) if str(x).strip()],
+            quantum_score_min=float(body.quantum_score_min) if body.quantum_score_min is not None else -1.0,
+            environments=[str(x).strip() for x in (body.environments or []) if str(x).strip()],
+            teams=[str(x).strip() for x in (body.teams or []) if str(x).strip()],
+            criticalities=[str(x).strip() for x in (body.criticalities or []) if str(x).strip()],
+            tags=[str(x).strip() for x in (body.tags or []) if str(x).strip()],
+            cooldown_minutes=int(body.cooldown_minutes or 0),
+            rule_id=body.id,
+        )
+        return {"ok": True, "rule": rule}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/integrations/rules/{rule_id}")
+def api_delete_rule(rule_id: int):
+    delete_event_rule(int(rule_id))
+    return {"ok": True}
+
+
+@app.post("/integrations/rules/test")
+def api_test_rules(body: dict = None):
+    body = body or {}
+    scan_id = str(body.get("scan_id") or "").strip()
+    if not scan_id:
+        # default to latest scan
+        rows = list_scan_rows(limit=1)
+        if rows:
+            scan_id = str(rows[0].get("id") or "")
+    if not scan_id:
+        return {"ok": False, "error": "no scan_id available"}
+    try:
+        return {"ok": True, **test_rules_for_scan(scan_id)}
+    except Exception as e:
+        return {"ok": False, "error": str(e), "scan_id": scan_id}
 
